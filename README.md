@@ -8,4 +8,4 @@ This code will implement a clustered forward shader using the Vulkan API. For mo
 ### Milestones
 1. Implement basic forward renderer in Vulkan
 2. Implement clustered shading + performance analysis
-3. Anything missing from Milestone 2. + stretch goals as listed in the proposal
+3. Anything missing from Milestone 2 + stretch goals as listed in the proposal
