@@ -16,7 +16,7 @@ This code will implement a clustered forward shader using the Vulkan API. For mo
   <img src="https://github.com/xnieamo/VulkanClusteredShader/blob/master/img/modelExample.gif?raw=true">
 </p>
 
-So far, I have completed the Vulkan tutorial and generated the above GIF using the code from the tutorial. I need to refactor the code because it is currently sitting in a single file, which will lead to headaches later. Furthermore, there are no camera controls implemented yet which will also be necessary to build in.
+So far, I have completed the Vulkan tutorial and generated the above GIF using the code from the tutorial. I need to refactor the code because it is currently sitting in a single file, which will lead to headaches later. Furthermore, there are no camera controls implemented yet which will also be necessary to build in. Furthermore, the current code is just reading in texture color values and not performing any real rendering calculations.
 
 ### References
 Base code: The code in this repository starts off from and modifies the code from the online Vulkan tutorial by Alexander Overvoorde.
