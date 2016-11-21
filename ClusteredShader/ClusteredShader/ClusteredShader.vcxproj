@@ -52,7 +52,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\Xiaomao\Desktop\Desktop Things\School Folders And Files\Senior Year\Courses\CIS565\VulkanClusteredShader\lib\stb-master;C:\VulkanSDK\1.0.30.0\Include;C:\Users\Xiaomao\Desktop\Desktop Things\School Folders And Files\Senior Year\Courses\CIS565\VulkanClusteredShader\lib\glfw-3.2.1.bin.WIN32\include;C:\Users\Xiaomao\Desktop\Desktop Things\School Folders And Files\Senior Year\Courses\CIS565\VulkanClusteredShader\lib\glm;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\Xiaomao\Desktop\Desktop Things\School Folders And Files\Senior Year\Courses\CIS565\VulkanClusteredShader\lib\tinyobjloader-master;C:\Users\Xiaomao\Desktop\Desktop Things\School Folders And Files\Senior Year\Courses\CIS565\VulkanClusteredShader\lib\stb-master;C:\VulkanSDK\1.0.30.0\Include;C:\Users\Xiaomao\Desktop\Desktop Things\School Folders And Files\Senior Year\Courses\CIS565\VulkanClusteredShader\lib\glfw-3.2.1.bin.WIN32\include;C:\Users\Xiaomao\Desktop\Desktop Things\School Folders And Files\Senior Year\Courses\CIS565\VulkanClusteredShader\lib\glm;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -70,7 +70,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\Xiaomao\Desktop\Desktop Things\School Folders And Files\Senior Year\Courses\CIS565\VulkanClusteredShader\lib\stb-master;C:\VulkanSDK\1.0.30.0\Include;C:\Users\Xiaomao\Desktop\Desktop Things\School Folders And Files\Senior Year\Courses\CIS565\VulkanClusteredShader\lib\glfw-3.2.1.bin.WIN32\include;C:\Users\Xiaomao\Desktop\Desktop Things\School Folders And Files\Senior Year\Courses\CIS565\VulkanClusteredShader\lib\glm;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\Xiaomao\Desktop\Desktop Things\School Folders And Files\Senior Year\Courses\CIS565\VulkanClusteredShader\lib\tinyobjloader-master;C:\Users\Xiaomao\Desktop\Desktop Things\School Folders And Files\Senior Year\Courses\CIS565\VulkanClusteredShader\lib\stb-master;C:\VulkanSDK\1.0.30.0\Include;C:\Users\Xiaomao\Desktop\Desktop Things\School Folders And Files\Senior Year\Courses\CIS565\VulkanClusteredShader\lib\glfw-3.2.1.bin.WIN32\include;C:\Users\Xiaomao\Desktop\Desktop Things\School Folders And Files\Senior Year\Courses\CIS565\VulkanClusteredShader\lib\glm;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
