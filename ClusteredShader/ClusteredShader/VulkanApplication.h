@@ -28,6 +28,11 @@
 #include <random>
 
 #include "VDeleter.h"
+#include "SceneStructs.h"
+#include "Utils.h"
+#include "VulkanUtils.h"
+
+using namespace SceneStructs;
 
 const int WIDTH = 1200;
 const int HEIGHT = 1000;
@@ -35,10 +40,6 @@ const int HEIGHT = 1000;
 const std::string MODEL_PATH = "../../res/models/sponza.obj";
 const std::string TEXTURE_PATH = "../../res/textures/kamen.jpg";
 const std::string NORMAP_PATH = "../../res/textures/KAMEN-bump.jpg";
-
-const std::vector<const char*> validationLayers = {
-	"VK_LAYER_LUNARG_standard_validation"
-};
 
 const std::vector<const char*> deviceExtensions = {
 	VK_KHR_SWAPCHAIN_EXTENSION_NAME
@@ -82,53 +83,6 @@ struct SwapChainSupportDetails {
 	std::vector<VkPresentModeKHR> presentModes;
 };
 
-struct Vertex {
-	glm::vec3 pos;
-	glm::vec3 color;
-	glm::vec2 texCoord;
-	glm::vec3 normal;
-
-	static VkVertexInputBindingDescription getBindingDescription() {
-		VkVertexInputBindingDescription bindingDescription = {};
-		bindingDescription.binding = 0;
-		bindingDescription.stride = sizeof(Vertex);
-		bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-		return bindingDescription;
-	}
-
-	static std::array<VkVertexInputAttributeDescription, 4> getAttributeDescriptions() {
-		std::array<VkVertexInputAttributeDescription, 4> attributeDescriptions = {};
-
-		attributeDescriptions[0].binding = 0;
-		attributeDescriptions[0].location = 0;
-		attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescriptions[0].offset = offsetof(Vertex, pos);
-
-		attributeDescriptions[1].binding = 0;
-		attributeDescriptions[1].location = 1;
-		attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescriptions[1].offset = offsetof(Vertex, color);
-
-		attributeDescriptions[2].binding = 0;
-		attributeDescriptions[2].location = 2;
-		attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
-		attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
-
-		attributeDescriptions[3].binding = 0;
-		attributeDescriptions[3].location = 3;
-		attributeDescriptions[3].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescriptions[3].offset = offsetof(Vertex, normal);
-
-
-		return attributeDescriptions;
-	}
-
-	bool operator==(const Vertex& other) const {
-		return pos == other.pos && color == other.color && texCoord == other.texCoord && normal == other.normal;
-	}
-};
-
 namespace std {
 	template<> struct hash<Vertex> {
 		size_t operator()(Vertex const& vertex) const {
@@ -141,13 +95,6 @@ namespace std {
 	};
 }
 
-struct UniformBufferObject {
-	glm::mat4 model;
-	glm::mat4 view;
-	glm::mat4 proj;
-	glm::vec3 cPos;
-};
-
 // Mouse control variables
 enum ControlState { NONE = 0, ROTATE, TRANSLATE };
 ControlState mouseState = ControlState::NONE;
@@ -156,20 +103,7 @@ glm::vec2 screenPos;
 glm::vec3 trans;
 glm::vec2 rotate;
 float scale = 1.f;
-
 glm::vec3 F, R, U, P;
-
-// Lights
-const int numLights = 100;
-struct uboLights {
-	// Using the fourth entry in lightPos as the radius
-	glm::vec4 lightPos[numLights];
-	glm::vec3 lightCol[numLights];
-};
-
-const float light_dt = 0.02f;
-const float light_mx = 30.f;
-const float light_mn = 0.f;
 
 
 class VulkanApplication {
@@ -962,35 +896,47 @@ private:
 		createCommandBuffers();
 	}
 
+	// Instance creation.
 	void createInstance() {
-		if (enableValidationLayers && !checkValidationLayerSupport()) {
+		// Check that desired validation layers are available if enabled.
+		if (enableValidationLayers && !VkUtils::checkValidationLayerSupport()) {
 			throw std::runtime_error("validation layers requested, but not available!");
 		}
 
+		// This is information about the application. For the most part, this
+		// information is optional (but useful to have).
 		VkApplicationInfo appInfo = {};
 		appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-		appInfo.pApplicationName = "Hello Triangle";
+		appInfo.pApplicationName = "ClusteredShader";
 		appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
 		appInfo.pEngineName = "No Engine";
 		appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
 		appInfo.apiVersion = VK_API_VERSION_1_0;
 
+		// This is not optional. This information tells the Vulkan driver what 
+		// extensions and validations layers we want to use. These define global
+		// settings for the entire APPLICATION.
 		VkInstanceCreateInfo createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 		createInfo.pApplicationInfo = &appInfo;
 
-		auto extensions = getRequiredExtensions();
+		// Find the extentions that GLFW needs to interface with the window
+		// system. See VulkanUtils.h
+		auto extensions = VkUtils::getRequiredExtensions(enableValidationLayers);
 		createInfo.enabledExtensionCount = extensions.size();
 		createInfo.ppEnabledExtensionNames = extensions.data();
 
+		// Determine which global validation layers to use. Either load the
+		// desired validation layers or use none.
 		if (enableValidationLayers) {
-			createInfo.enabledLayerCount = validationLayers.size();
-			createInfo.ppEnabledLayerNames = validationLayers.data();
+			createInfo.enabledLayerCount = VkUtils::validationLayers.size();
+			createInfo.ppEnabledLayerNames = VkUtils::validationLayers.data();
 		}
 		else {
 			createInfo.enabledLayerCount = 0;
 		}
 
+		// Create our instance
 		if (vkCreateInstance(&createInfo, nullptr, instance.replace()) != VK_SUCCESS) {
 			throw std::runtime_error("failed to create instance!");
 		}
@@ -1002,7 +948,7 @@ private:
 		VkDebugReportCallbackCreateInfoEXT createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT;
 		createInfo.flags = VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT;
-		createInfo.pfnCallback = debugCallback;
+		createInfo.pfnCallback = VkUtils::debugCallback;
 
 		if (CreateDebugReportCallbackEXT(instance, &createInfo, nullptr, callback.replace()) != VK_SUCCESS) {
 			throw std::runtime_error("failed to set up debug callback!");
@@ -1068,8 +1014,8 @@ private:
 		createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
 		if (enableValidationLayers) {
-			createInfo.enabledLayerCount = validationLayers.size();
-			createInfo.ppEnabledLayerNames = validationLayers.data();
+			createInfo.enabledLayerCount = VkUtils::validationLayers.size();
+			createInfo.ppEnabledLayerNames = VkUtils::validationLayers.data();
 		}
 		else {
 			createInfo.enabledLayerCount = 0;
@@ -1797,70 +1743,4 @@ private:
 		return indices;
 	}
 
-	std::vector<const char*> getRequiredExtensions() {
-		std::vector<const char*> extensions;
-
-		unsigned int glfwExtensionCount = 0;
-		const char** glfwExtensions;
-		glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
-		for (unsigned int i = 0; i < glfwExtensionCount; i++) {
-			extensions.push_back(glfwExtensions[i]);
-		}
-
-		if (enableValidationLayers) {
-			extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
-		}
-
-		return extensions;
-	}
-
-	bool checkValidationLayerSupport() {
-		uint32_t layerCount;
-		vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
-
-		std::vector<VkLayerProperties> availableLayers(layerCount);
-		vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
-
-		for (const char* layerName : validationLayers) {
-			bool layerFound = false;
-
-			for (const auto& layerProperties : availableLayers) {
-				if (strcmp(layerName, layerProperties.layerName) == 0) {
-					layerFound = true;
-					break;
-				}
-			}
-
-			if (!layerFound) {
-				return false;
-			}
-		}
-
-		return true;
-	}
-
-	static std::vector<char> readFile(const std::string& filename) {
-		std::ifstream file(filename, std::ios::ate | std::ios::binary);
-
-		if (!file.is_open()) {
-			throw std::runtime_error("failed to open file!");
-		}
-
-		size_t fileSize = (size_t)file.tellg();
-		std::vector<char> buffer(fileSize);
-
-		file.seekg(0);
-		file.read(buffer.data(), fileSize);
-
-		file.close();
-
-		return buffer;
-	}
-
-	static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objType, uint64_t obj, size_t location, int32_t code, const char* layerPrefix, const char* msg, void* userData) {
-		std::cerr << "validation layer: " << msg << std::endl;
-
-		return VK_FALSE;
-	}
 };
