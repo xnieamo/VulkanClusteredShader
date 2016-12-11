@@ -82,9 +82,11 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="DefaultVkInfo.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="DefaultVkInfo.h" />
     <ClInclude Include="DeviceUtils.h" />
     <ClInclude Include="main.h" />
     <ClInclude Include="SceneStructs.h" />
