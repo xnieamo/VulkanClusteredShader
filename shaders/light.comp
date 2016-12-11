@@ -1,0 +1,41 @@
+#version 450
+
+#extension GL_ARB_separate_shader_objects : enable
+#extension GL_ARB_shading_language_420pack : enable
+
+struct Light 
+{
+	vec4 pos;
+	vec4 col;
+	vec4 vel;
+};
+
+// LOOK: These bindings correspond to the DescriptorSetLayouts and
+// the DescriptorSets from prepareCompute()!
+
+// Binding 0 : Particle storage buffer (read)
+layout(std140, binding = 0) buffer LightsA
+{
+	Light LightsA1[];
+};
+
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+void main()
+{
+
+	// Current SSBO index
+	uint index = gl_GlobalInvocationID.x;
+	// Don't try to write beyond particle count
+	if (index >= 100)
+		return;
+
+	vec4 pos = LightsA1[index].pos;
+	vec4 vel = LightsA1[index].vel;
+	pos[1] += vel[0];
+	if (pos[1] >= vel[1])
+		pos[1] = vel[2];
+
+	LightsA1[index].pos = pos;
+}

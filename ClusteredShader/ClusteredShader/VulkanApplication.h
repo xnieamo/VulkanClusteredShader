@@ -34,10 +34,11 @@
 #include "DeviceUtils.h"
 #include "DefaultVkInfo.h"
 
-using namespace SceneStructs;
 
-const int WIDTH = 1200;
-const int HEIGHT = 1000;
+//using namespace SceneStructs;
+
+#define WIDTH 1200
+#define HEIGHT 1000
 
 const std::string MODEL_PATH = "../../res/models/sponza.obj";
 const std::string TEXTURE_PATH = "../../res/textures/kamen.jpg";
@@ -45,6 +46,7 @@ const std::string NORMAP_PATH = "../../res/textures/KAMEN-bump.jpg";
 
 const std::string VERT_SHADER = "../../shaders/vert.spv";
 const std::string FRAG_SHADER = "../../shaders/frag.spv";
+const std::string LIGHT_SHADER = "../../shaders/light.spv";
 
 #ifndef NDEBUG
 const bool enableValidationLayers = false;
@@ -52,18 +54,6 @@ const bool enableValidationLayers = false;
 const bool enableValidationLayers = true;
 #endif
 
-
-namespace std {
-	template<> struct hash < Vertex > {
-		size_t operator()(Vertex const& vertex) const {
-			return (
-				(hash<glm::vec3>()(vertex.pos) ^
-				(hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
-				(hash<glm::vec2>()(vertex.texCoord) << 1 ^
-				(hash<glm::vec3>()(vertex.normal) << 1));
-		}
-	};
-}
 
 // Mouse control variables
 enum ControlState { NONE = 0, ROTATE, TRANSLATE };
@@ -118,6 +108,7 @@ private:
 	VDeleter<VkDeviceMemory> depthImageMemory{ device, vkFreeMemory };
 	VDeleter<VkImageView> depthImageView{ device, vkDestroyImageView };
 
+	// Mesh obj
 	std::vector<Vertex> vertices;
 	std::vector<uint32_t> indices;
 	VDeleter<VkBuffer> vertexBuffer{ device, vkDestroyBuffer };
@@ -161,6 +152,257 @@ private:
 	VDeleter<VkSampler> textureSampler{ device, vkDestroySampler };
 
 
+	// Allocations for a compute shader to move the lights around
+	VDeleter<VkBuffer> lightStorageA{ device, vkDestroyBuffer };
+	//VDeleter<VkBuffer> lightStorageB{ device, vkDestroyBuffer };
+	VDeleter<VkDeviceMemory> lightStorageAMemory{ device, vkFreeMemory };
+	//VDeleter<VkDeviceMemory> lightStorageBMemory{ device, vkFreeMemory };
+
+	VDeleter<VkDescriptorSetLayout> lightDescriptorSetLayout{ device, vkDestroyDescriptorSetLayout };
+	VDeleter<VkPipelineLayout> lightPipelineLayout{ device, vkDestroyPipelineLayout };
+	VDeleter<VkPipeline> lightPipeline{ device, vkDestroyPipeline };
+	VkDescriptorSet lightDescriptorSets[2];
+
+	VDeleter<VkCommandPool> lightCommandPool{ device, vkDestroyCommandPool };
+	VkCommandBuffer lightCommandBuffer = VK_NULL_HANDLE;
+
+	VDeleter<VkFence> lightFence{ device, vkDestroyFence };
+
+	void createComputeLightMoveBuffers(){
+		// Create the lights
+		std::default_random_engine rng;
+		std::uniform_real_distribution<float> u01(0.f, 1.f);
+		
+		std::vector<Light> lights(numLights);
+		for (int i = 0; i < numLights; i++) {
+			glm::vec3 pos;
+			pos.x = (u01(rng) - 0.5f) * 20.f;
+			pos.y = (u01(rng)) * 30.f;
+			pos.z = (u01(rng) - 0.5f) * 40.f;
+
+			glm::vec4 col;
+			col.r = u01(rng);
+			col.g = u01(rng);
+			col.b = u01(rng);
+			col.a = 1.f;
+
+			lights[i].pos = glm::vec4(pos, u01(rng) * 10.f + 1.f);
+			lights[i].col = col;
+			lights[i].vel = { 0.1f, 40.f, 0.0f, 0.0f };
+		}
+
+		VkDeviceSize bufferSize = lights.size() * sizeof(Light);
+
+		VDeleter<VkBuffer> stagingBuffer{ device, vkDestroyBuffer };
+		VDeleter<VkDeviceMemory> stagingBufferMemory{ device, vkFreeMemory };
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+
+		void* data;
+		vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, lights.data(), (size_t)bufferSize);
+		vkUnmapMemory(device, stagingBufferMemory);
+
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, lightStorageA, lightStorageAMemory);
+
+		copyBuffer(stagingBuffer, lightStorageA, bufferSize);
+	}
+
+	void createLightDescriptorSetLayout() {
+		VkDescriptorSetLayoutBinding storageBufferABinding = {};
+		storageBufferABinding.binding = 0;
+		storageBufferABinding.descriptorCount = 1;
+		storageBufferABinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		storageBufferABinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+		std::array<VkDescriptorSetLayoutBinding, 1> bindings = { storageBufferABinding };
+		VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		layoutInfo.bindingCount = bindings.size();
+		layoutInfo.pBindings = bindings.data();
+
+		if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, lightDescriptorSetLayout.replace()) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create descriptor set layout!");
+		}
+	}
+
+	void createLightComputePipeline(){
+
+		VkDescriptorSetLayout setLayouts[] = { lightDescriptorSetLayout };
+		VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
+		pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+		pipelineLayoutInfo.setLayoutCount = 1;
+		pipelineLayoutInfo.pSetLayouts = setLayouts;
+
+		if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, lightPipelineLayout.replace()) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create pipeline layout!");
+		}
+
+		auto compShaderCode = readFile(LIGHT_SHADER);
+
+		VDeleter<VkShaderModule> compShaderModule{ device, vkDestroyShaderModule };
+		VkUtils::createShaderModule(device, compShaderCode, compShaderModule);
+		VkPipelineShaderStageCreateInfo compShaderStageInfo = VkInfoUtils::createShaderStageInfo();
+		compShaderStageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+		compShaderStageInfo.module = compShaderModule;
+
+		VkComputePipelineCreateInfo pipelineInfo = {};
+		pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+		pipelineInfo.stage = compShaderStageInfo;
+		pipelineInfo.layout = lightPipelineLayout;
+		pipelineInfo.pNext = nullptr;
+		pipelineInfo.flags = 0;
+		pipelineInfo.basePipelineHandle = VK_NULL_HANDLE; // not deriving from existing pipeline
+		pipelineInfo.basePipelineIndex = -1; // Optional
+
+		if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, lightPipeline.replace()) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create graphics pipeline!");
+		}
+	}
+
+	void createLightCommandPool() {
+		PDevUtil::QueueFamilyIndices queueFamilyIndices = PDevUtil::findQueueFamilies(physicalDevice, surface);
+
+		VkCommandPoolCreateInfo poolInfo = {};
+		poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+		poolInfo.queueFamilyIndex = queueFamilyIndices.computeFamily;
+		if (vkCreateCommandPool(device, &poolInfo, nullptr, lightCommandPool.replace()) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create graphics command pool!");
+		}
+	}
+
+	void createLightDescriptorSet(){
+		VkDescriptorSetLayout layouts[] = { lightDescriptorSetLayout, lightDescriptorSetLayout };
+		VkDescriptorSetAllocateInfo allocInfo = {};
+		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		allocInfo.descriptorPool = descriptorPool;
+		allocInfo.descriptorSetCount = 2;
+		allocInfo.pSetLayouts = layouts;
+
+		if (vkAllocateDescriptorSets(device, &allocInfo, lightDescriptorSets) != VK_SUCCESS) {
+			throw std::runtime_error("failed to allocate descriptor set!");
+		}
+
+		VkDescriptorBufferInfo bufferA = {};
+		bufferA.buffer = lightStorageA;
+		bufferA.offset = 0;
+		bufferA.range = sizeof(Light) * numLights;
+
+		std::array<VkWriteDescriptorSet, 2> descriptorWrites = {};
+
+		descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrites[0].dstSet = lightDescriptorSets[0];
+		descriptorWrites[0].dstBinding = 0;
+		descriptorWrites[0].dstArrayElement = 0;
+		descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		descriptorWrites[0].descriptorCount = 1;
+		descriptorWrites[0].pBufferInfo = &bufferA;
+
+		descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrites[1].dstSet = lightDescriptorSets[1];
+		descriptorWrites[1].dstBinding = 0;
+		descriptorWrites[1].dstArrayElement = 0;
+		descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		descriptorWrites[1].descriptorCount = 1;
+		descriptorWrites[1].pBufferInfo = &bufferA;
+
+		vkUpdateDescriptorSets(device, descriptorWrites.size(), descriptorWrites.data(), 0, nullptr);
+	}
+
+	void createLightCommandBuffers() {
+
+		// Wait to finish
+		vkWaitForFences(device, 1, &lightFence, VK_TRUE, UINT64_MAX);
+		vkResetFences(device, 1, &lightFence);
+
+		if (lightCommandBuffer) {
+			vkFreeCommandBuffers(device, commandPool, 1, &lightCommandBuffer);
+			lightCommandBuffer = VK_NULL_HANDLE;
+		}
+
+		// Make new command buffer
+		VkCommandBufferAllocateInfo allocInfo = {};
+		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+		allocInfo.commandPool = commandPool;
+		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		allocInfo.commandBufferCount = 1;
+
+		if (vkAllocateCommandBuffers(device, &allocInfo, &lightCommandBuffer) != VK_SUCCESS) {
+			throw std::runtime_error("failed to allocate command buffers!");
+		}
+
+		VkCommandBufferBeginInfo beginInfo = {};
+		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+
+		vkBeginCommandBuffer(lightCommandBuffer, &beginInfo);
+
+		PDevUtil::QueueFamilyIndices queueFamilyIndices = PDevUtil::findQueueFamilies(physicalDevice, surface);
+
+		VkBufferMemoryBarrier bufferBarrier = {};
+		bufferBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+		bufferBarrier.buffer = lightStorageA;
+		bufferBarrier.size = sizeof(Light) * numLights;
+		bufferBarrier.srcAccessMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		bufferBarrier.dstAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+		bufferBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		bufferBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+		bufferBarrier.dstQueueFamilyIndex = queueFamilyIndices.computeFamily;
+		bufferBarrier.srcQueueFamilyIndex = queueFamilyIndices.computeFamily;
+
+		vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
+		vkCmdBindPipeline(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipeline);
+		vkCmdBindDescriptorSets(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipelineLayout, 0, 1, lightDescriptorSets, 0, 0);
+		vkCmdDispatch(lightCommandBuffer, numLights / 16, 1, 1);
+
+		bufferBarrier.srcAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+		bufferBarrier.dstAccessMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		bufferBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		bufferBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+		bufferBarrier.dstQueueFamilyIndex = queueFamilyIndices.computeFamily;
+		bufferBarrier.srcQueueFamilyIndex = queueFamilyIndices.computeFamily;
+		vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
+
+		if (vkEndCommandBuffer(lightCommandBuffer) != VK_SUCCESS) {
+			throw std::runtime_error("failed to record command buffer!");
+		}
+	}
+
+	// For vertices
+	void createVertexBuffer() {
+		VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+
+		VDeleter<VkBuffer> stagingBuffer{ device, vkDestroyBuffer };
+		VDeleter<VkDeviceMemory> stagingBufferMemory{ device, vkFreeMemory };
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+
+		void* data;
+		vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, vertices.data(), (size_t)bufferSize);
+		vkUnmapMemory(device, stagingBufferMemory);
+
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
+
+		copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+	}
+
+	void createIndexBuffer() {
+		VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+
+		VDeleter<VkBuffer> stagingBuffer{ device, vkDestroyBuffer };
+		VDeleter<VkDeviceMemory> stagingBufferMemory{ device, vkFreeMemory };
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+
+		void* data;
+		vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, indices.data(), (size_t)bufferSize);
+		vkUnmapMemory(device, stagingBufferMemory);
+
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
+
+		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+	}
+
+
 	void initWindow() {
 		glfwInit();
 
@@ -197,21 +439,34 @@ private:
 		setUpTexture(TEXTURE_PATH, textureImage, textureImageMemory, textureImageView, textureSampler);
 		setUpTexture(NORMAP_PATH, norMapImage, norMapImageMemory, norMapImageView, norMapSampler);
 
-
-		loadModel();
+		// Load the obj.
+		loadModel(MODEL_PATH, vertices, indices);
 
 		// Create buffers
 		createVertexBuffer();
 		createIndexBuffer();
-		createUniformBuffer();
-
+		createUniformBuffer(sizeof(UniformBufferObject), uniformStagingBuffer, uniformStagingBufferMemory, uniformBuffer, uniformBufferMemory);
+		createUniformBuffer(sizeof(uboLights), lightStagingBuffer, lightStagingBufferMemory, lightBuffer, lightBufferMemory);
+		
 		// Lights
-		createLightBuffer();
 		createLights();
+
+		createComputeLightMoveBuffers();
+		createLightDescriptorSetLayout();
 
 		createDescriptorPool();
 		createDescriptorSet();
 		createCommandBuffers();
+
+		// Light compute shader
+
+		createLightComputePipeline();
+		//createLightCommandPool();
+		createFence();
+		
+		createLightDescriptorSet();
+		createLightCommandBuffers();
+
 		createSemaphores();
 	}
 
@@ -285,13 +540,6 @@ private:
 	/***********************************
 	*            Draw updates          *
 	************************************/
-	void createUniformBuffer() {
-		VkDeviceSize bufferSize = sizeof(UniformBufferObject);
-
-		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, uniformStagingBuffer, uniformStagingBufferMemory);
-		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, uniformBuffer, uniformBufferMemory);
-	}
-
 	void updateUniformBuffer() {
 		static auto startTime = std::chrono::high_resolution_clock::now();
 
@@ -345,6 +593,27 @@ private:
 			throw std::runtime_error("failed to acquire swap chain image!");
 		}
 
+		{
+			VkSubmitInfo submitInfo = {};
+			submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+			submitInfo.waitSemaphoreCount = 0;
+			submitInfo.pWaitSemaphores = nullptr;
+			submitInfo.pWaitDstStageMask = nullptr;
+			submitInfo.commandBufferCount = 1;
+			submitInfo.pCommandBuffers = &lightCommandBuffer;
+			submitInfo.signalSemaphoreCount = 0;
+			submitInfo.pSignalSemaphores = nullptr;
+
+			if (vkQueueSubmit(computeQueue, 1, &submitInfo, lightFence) != VK_SUCCESS) {
+				throw std::runtime_error("failed to submit draw command buffer!");
+			}
+
+			vkWaitForFences(device, 1, &lightFence, VK_TRUE, UINT64_MAX);
+			vkResetFences(device, 1, &lightFence);
+		}
+
+
+		// submit graphics command buffer
 		VkSubmitInfo submitInfo = {};
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
@@ -389,6 +658,8 @@ private:
 		else if (result != VK_SUCCESS) {
 			throw std::runtime_error("failed to present swap chain image!");
 		}
+
+		std::swap(lightDescriptorSets[1], lightDescriptorSets[0]);
 	}
 
 	// End draw updates
@@ -421,13 +692,6 @@ private:
 		}
 	}
 
-	void createLightBuffer() {
-		VkDeviceSize bufferSize = sizeof(uboLights);
-
-		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, lightStagingBuffer, lightStagingBufferMemory);
-		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, lightBuffer, lightBufferMemory);
-	}
-
 	void updateLightBuffer(){
 		for (int i = 0; i < numLights; i++) {
 			lightData.lightPos[i][1] += light_dt;
@@ -435,6 +699,7 @@ private:
 				lightData.lightPos[i][1] = light_mn;
 		}
 
+		// Update data on GPU
 		void* data;
 		vkMapMemory(device, lightStagingBufferMemory, 0, sizeof(lightData), 0, &data);
 		memcpy(data, &lightData, sizeof(lightData));
@@ -449,31 +714,8 @@ private:
 	*          Compute Shader          *
 	************************************/
 
-	struct {
-		VDeleter<VkDevice> device{ vkDestroyDevice };
-		VDeleter<VkBuffer> positionA{ device, vkDestroyBuffer }; // Read buffer
-		VDeleter<VkBuffer> positionB{ device, vkDestroyBuffer }; // Write buffer
-
-		VkQueue queue;								// Separate queue for compute commands (queue family may differ from the one used for graphics)
-
-		VDeleter<VkCommandPool> commandPool{ device, vkDestroyCommandPool };
-		VkCommandBuffer commandBuffer;				// Command buffer storing the dispatch commands and barriers
-		VDeleter<VkSemaphore> computeFinishedSemaphore{ device, vkDestroySemaphore };
-
-		VDeleter<VkDescriptorSetLayout> descriptorSetLayout{ device, vkDestroyDescriptorSetLayout };
-		VDeleter<VkPipelineLayout> pipelineLayout{ device, vkDestroyPipelineLayout };
-		VDeleter<VkPipeline> graphicsPipeline{ device, vkDestroyPipeline };
-		VkDescriptorSet descriptorSets[2];			// Compute shader bindings - encapsulate buffers for interfacing with the pipeline
-	} compute;
-
-	void createComputeBuffers(){
-		compute.device = device;
-
-		VkDeviceSize storageBufferSize = vertices.size() * sizeof(Vertex);
-	}
 
 	// End Compute shader
-
 
 
 	/***********************************
@@ -497,7 +739,7 @@ private:
 		VkDescriptorSetLayoutBinding lightLayoutBinding = {};
 		lightLayoutBinding.binding = 2;
 		lightLayoutBinding.descriptorCount = 1;
-		lightLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		lightLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 		lightLayoutBinding.pImmutableSamplers = nullptr;
 		lightLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
@@ -520,21 +762,19 @@ private:
 	}
 
 	void createDescriptorPool() {
-		std::array<VkDescriptorPoolSize, 4> poolSizes = {};
+		std::array<VkDescriptorPoolSize, 3> poolSizes = {};
 		poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		poolSizes[0].descriptorCount = 1;
+		poolSizes[0].descriptorCount = 2;
 		poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		poolSizes[1].descriptorCount = 1;
-		poolSizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		poolSizes[2].descriptorCount = 1;
-		poolSizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		poolSizes[3].descriptorCount = 1;
+		poolSizes[1].descriptorCount = 2;
+		poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		poolSizes[2].descriptorCount = 5;
 
 		VkDescriptorPoolCreateInfo poolInfo = {};
 		poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
 		poolInfo.poolSizeCount = poolSizes.size();
 		poolInfo.pPoolSizes = poolSizes.data();
-		poolInfo.maxSets = 1;
+		poolInfo.maxSets = 3;
 
 		if (vkCreateDescriptorPool(device, &poolInfo, nullptr, descriptorPool.replace()) != VK_SUCCESS) {
 			throw std::runtime_error("failed to create descriptor pool!");
@@ -559,9 +799,9 @@ private:
 		bufferInfo.range = sizeof(UniformBufferObject);
 
 		VkDescriptorBufferInfo lightInfo = {};
-		lightInfo.buffer = lightBuffer;
+		lightInfo.buffer = lightStorageA;
 		lightInfo.offset = 0;
-		lightInfo.range = sizeof(uboLights);
+		lightInfo.range = sizeof(Light) * numLights;
 
 		VkDescriptorImageInfo imageInfo = {};
 		imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -595,7 +835,7 @@ private:
 		descriptorWrites[2].dstSet = descriptorSet;
 		descriptorWrites[2].dstBinding = 2;
 		descriptorWrites[2].dstArrayElement = 0;
-		descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 		descriptorWrites[2].descriptorCount = 1;
 		descriptorWrites[2].pBufferInfo = &lightInfo;
 
@@ -835,7 +1075,6 @@ private:
 		if (vkCreateDevice(physicalDevice, &createInfo, nullptr, device.replace()) != VK_SUCCESS) {
 			throw std::runtime_error("failed to create logical device!");
 		}
-
 		// Retrieve the queue handles for use in the application.
 		vkGetDeviceQueue(device, indices.graphicsFamily, 0, &graphicsQueue);
 		vkGetDeviceQueue(device, indices.presentFamily, 0, &presentQueue);
@@ -941,6 +1180,7 @@ private:
 			createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, swapChainImageViews[i]);
 		}
 	}
+
 
 	// Pipeline. A lot of these settings can be factored out to a utility file.
 	void createGraphicsPipeline() {
@@ -1156,7 +1396,7 @@ private:
 
 		VkCommandPoolCreateInfo poolInfo = {};
 		poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-		poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily;
+		poolInfo.queueFamilyIndex = queueFamilyIndices.computeFamily;
 
 		if (vkCreateCommandPool(device, &poolInfo, nullptr, commandPool.replace()) != VK_SUCCESS) {
 			throw std::runtime_error("failed to create graphics command pool!");
@@ -1200,6 +1440,18 @@ private:
 		return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
 	}
 
+	/****  Uniform Buffers ****/
+	void createUniformBuffer(
+		int size,
+		VDeleter<VkBuffer> &uniformStagingBuffer,
+		VDeleter<VkDeviceMemory> &uniformStagingBufferMemory,
+		VDeleter<VkBuffer> &uniformBuffer,
+		VDeleter<VkDeviceMemory> &uniformBufferMemory) {
+		VkDeviceSize bufferSize = size;
+
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, uniformStagingBuffer, uniformStagingBufferMemory);
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, uniformBuffer, uniformBufferMemory);
+	}
 
 
 	void createImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VDeleter<VkImage>& image, VDeleter<VkDeviceMemory>& imageMemory) {
@@ -1324,108 +1576,6 @@ private:
 		endSingleTimeCommands(commandBuffer);
 	}
 
-	void loadModel() {
-		tinyobj::attrib_t attrib;
-		std::vector<tinyobj::shape_t> shapes;
-		std::vector<tinyobj::material_t> materials;
-		std::string err;
-
-		if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &err, MODEL_PATH.c_str())) {
-			throw std::runtime_error(err);
-		}
-
-		std::unordered_map<Vertex, int> uniqueVertices = {};
-
-		for (const auto& shape : shapes) {
-			for (const auto& index : shape.mesh.indices) {
-				Vertex vertex = {};
-
-				vertex.pos = {
-					attrib.vertices[3 * index.vertex_index + 0],
-					attrib.vertices[3 * index.vertex_index + 1],
-					attrib.vertices[3 * index.vertex_index + 2]
-				};
-
-				vertex.texCoord = {
-					attrib.texcoords[2 * index.texcoord_index + 0],
-					1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
-				};
-
-				vertex.color = { 1.0f, 1.0f, 1.0f };
-
-				if (!attrib.normals.empty()) {
-					vertex.normal = {
-						attrib.normals[3 * index.normal_index + 0],
-						attrib.normals[3 * index.normal_index + 1],
-						attrib.normals[3 * index.normal_index + 2]
-					};
-				}
-
-
-				if (uniqueVertices.count(vertex) == 0) {
-					uniqueVertices[vertex] = vertices.size();
-					vertices.push_back(vertex);
-				}
-
-				indices.push_back(uniqueVertices[vertex]);
-			}
-		}
-
-		// Compute normals if they are not in the obj.
-		if (attrib.normals.empty()) {
-			for (int i = 0; i < indices.size(); i += 3) {
-				glm::vec3 p1 = vertices[indices[i + 0]].pos;
-				glm::vec3 p2 = vertices[indices[i + 1]].pos;
-				glm::vec3 p3 = vertices[indices[i + 2]].pos;
-
-				glm::vec3 e1 = p2 - p1;
-				glm::vec3 e2 = p3 - p2;
-
-				glm::vec3 N = glm::cross(e1, e2);
-
-				N = glm::normalize(N);
-				vertices[indices[i + 0]].normal = N;
-				vertices[indices[i + 1]].normal = N;
-				vertices[indices[i + 2]].normal = N;
-			}
-		}
-	}
-
-	// For vertices
-	void createVertexBuffer() {
-		VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
-
-		VDeleter<VkBuffer> stagingBuffer{ device, vkDestroyBuffer };
-		VDeleter<VkDeviceMemory> stagingBufferMemory{ device, vkFreeMemory };
-		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-
-		void* data;
-		vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-		memcpy(data, vertices.data(), (size_t)bufferSize);
-		vkUnmapMemory(device, stagingBufferMemory);
-
-		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
-
-		copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
-	}
-
-	void createIndexBuffer() {
-		VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
-
-		VDeleter<VkBuffer> stagingBuffer{ device, vkDestroyBuffer };
-		VDeleter<VkDeviceMemory> stagingBufferMemory{ device, vkFreeMemory };
-		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-
-		void* data;
-		vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-		memcpy(data, indices.data(), (size_t)bufferSize);
-		vkUnmapMemory(device, stagingBufferMemory);
-
-		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
-
-		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
-	}
-
 
 	void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VDeleter<VkBuffer>& buffer, VDeleter<VkDeviceMemory>& bufferMemory) {
 		VkBufferCreateInfo bufferInfo = {};
@@ -1509,6 +1659,7 @@ private:
 		throw std::runtime_error("failed to find suitable memory type!");
 	}
 
+
 	void createCommandBuffers() {
 		if (commandBuffers.size() > 0) {
 			vkFreeCommandBuffers(device, commandPool, commandBuffers.size(), commandBuffers.data());
@@ -1581,6 +1732,18 @@ private:
 
 			throw std::runtime_error("failed to create semaphores!");
 		}
+	}
+
+	void createFence() {
+		VkFenceCreateInfo fenceInfo = {};
+		fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+		fenceInfo.pNext = nullptr;
+		fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+		if (vkCreateFence(device, &fenceInfo, nullptr, lightFence.replace()) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create fence!");
+		}
+
 	}
 
 };

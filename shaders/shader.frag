@@ -12,11 +12,24 @@ layout(location = 0) out vec4 outColor;
 layout(binding = 1) uniform sampler2D texSampler;
 layout(binding = 3) uniform sampler2D norSampler;
 
+
+struct Light 
+{
+	vec4 pos;
+	vec4 col;
+	vec4 vel;
+};
+
+layout(std140, binding = 2) buffer LightsA
+{
+	Light lights[];
+};
+
 int numLights = 100;
-layout(binding = 2) uniform uboLights {
-	vec4 lightPos[100];
-	vec3 lightCol[100];
-} lights;
+// layout(binding = 2) uniform uboLights {
+// 	vec4 lightPos[100];
+// 	vec3 lightCol[100];
+// } lights;
 
 vec3 applyNormalMap(vec3 geomnor, vec3 normap) {
     normap = normap * 2.0 - 1.0;
@@ -41,16 +54,16 @@ void main() {
 	vec3 viewDir = normalize(camPos - fragPosition);
 
     for (int i = 0; i < numLights; i++) {
-    	vec3 lightDir = vec3(lights.lightPos[i]) - fragPosition;
+    	vec3 lightDir = vec3(lights[i].pos) - fragPosition;
     	float distance = length(lightDir);
     	lightDir = lightDir / distance;
 
-    	float attenuation = max(0.001f, lights.lightPos[i][3] - distance);
+    	float attenuation = max(0.001f, lights[i].pos[3] - distance);
 
     	float specular = specularLighting(nor, lightDir, viewDir);
     	float diffuse  = clamp(dot(nor, lightDir), 0.001, 1.0);
 
-    	color += texture(texSampler, fragTexCoord) * attenuation * vec4(lights.lightCol[i], 1.f) * (specular + diffuse); 
+    	color += texture(texSampler, fragTexCoord) * attenuation * vec4(normalize(lights[i].col.rgb), 1.f) * (specular + diffuse); 
     }
     outColor = clamp(1.f * color, 0.001, 1.0);// + 0.2 * texture(texSampler, fragTexCoord);
     //outColor = vec4(nor, 1.f);
