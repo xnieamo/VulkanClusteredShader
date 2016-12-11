@@ -1,6 +1,5 @@
 #pragma once
 
-#include <vulkan\vulkan.h>
 #include <vector>
 
 static std::vector<char> readFile(const std::string& filename) {
@@ -20,5 +19,6 @@ static std::vector<char> readFile(const std::string& filename) {
 
 	return buffer;
 }
+
 
 

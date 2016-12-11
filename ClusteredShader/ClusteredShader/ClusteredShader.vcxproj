@@ -85,6 +85,7 @@
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="DeviceUtils.h" />
     <ClInclude Include="main.h" />
     <ClInclude Include="SceneStructs.h" />
     <ClInclude Include="Utils.h" />

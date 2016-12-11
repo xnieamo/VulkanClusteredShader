@@ -1,9 +1,13 @@
+#pragma once
+
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
 #include <vector>
 #include <cstring>
+#include <iostream>
 
+// Utility functions for Vulkan
 namespace VkUtils{
 	// Define validation layers to use.
 	const std::vector<const char*> validationLayers = {
@@ -58,6 +62,21 @@ namespace VkUtils{
 		return true;
 	}
 
+	// Load shader byte code
+	void createShaderModule(VDeleter<VkDevice> &device, const std::vector<char>& code, VDeleter<VkShaderModule>& shaderModule) {
+		VkShaderModuleCreateInfo createInfo = {};
+		createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+		createInfo.codeSize = code.size();
+		createInfo.pCode = (uint32_t*)code.data();
+
+		if (vkCreateShaderModule(device, &createInfo, nullptr, shaderModule.replace()) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create shader module!");
+		}
+	}
+}
+
+// Functions and structs associated with debugging and callbacks.
+namespace VkDebug {
 	// Callback function for validation layer debugging
 	static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
 		VkDebugReportFlagsEXT flags,
@@ -72,4 +91,49 @@ namespace VkUtils{
 
 		return VK_FALSE;
 	}
+
+	// Need to use a proxy function to create a debug callback because it is an
+	// extension function.
+	VkResult CreateDebugReportCallbackEXT(
+		VkInstance instance, 
+		const VkDebugReportCallbackCreateInfoEXT* pCreateInfo, 
+		const VkAllocationCallbacks* pAllocator, 
+		VkDebugReportCallbackEXT* pCallback) {
+		auto func = (PFN_vkCreateDebugReportCallbackEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugReportCallbackEXT");
+		if (func != nullptr) {
+			return func(instance, pCreateInfo, pAllocator, pCallback);
+		}
+		else {
+			return VK_ERROR_EXTENSION_NOT_PRESENT;
+		}
+	}
+
+	// Similarly, need to create a destroy proxy function
+	void DestroyDebugReportCallbackEXT(
+		VkInstance instance, 
+		VkDebugReportCallbackEXT callback, 
+		const VkAllocationCallbacks* pAllocator) {
+		auto func = (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugReportCallbackEXT");
+		if (func != nullptr) {
+			func(instance, callback, pAllocator);
+		}
+	}
+
+	// Tells Vulkan about the debug callback
+	void setupDebugCallback(
+		VDeleter<VkInstance> &instance,
+		VDeleter<VkDebugReportCallbackEXT> &callback,
+		bool enableValidationLayers) {
+		if (!enableValidationLayers) return;
+
+		VkDebugReportCallbackCreateInfoEXT createInfo = {};
+		createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT;
+		createInfo.flags = VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT;
+		createInfo.pfnCallback = VkDebug::debugCallback;
+
+		if (CreateDebugReportCallbackEXT(instance, &createInfo, nullptr, callback.replace()) != VK_SUCCESS) {
+			throw std::runtime_error("failed to set up debug callback!");
+		}
+	}
 }
+
