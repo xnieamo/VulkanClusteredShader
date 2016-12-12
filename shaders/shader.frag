@@ -32,14 +32,14 @@ layout(std430, binding = 4) buffer Clusters
 
 layout(std430, binding = 5) buffer ClustersData
 {
-	ivec3 lookupIndices[];
-	// uint lookupIndices[][2];
+	// ivec2 lookupIndices[];
+	int lookupIndices[][2];
 };
 
-layout(origin_upper_left) in vec4 gl_FragCoord;
+// layout(origin_upper_left) in vec4 gl_FragCoord;
 
 int numLights = 100;
-const float Z_explicit[10] = {0.1f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f};
+const float Z_explicit[10] = {0.05f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f};
 
 #define WIDTH 1200
 #define HEIGHT 1000
@@ -100,19 +100,38 @@ void main() {
     int Sz = findZ(z_e);
 
     int l_idx = Sx + Sy * X;// + Sz * X * Y;
-    ivec3 lightIdx = lookupIndices[l_idx];
-    Light light = lights[lightIndexLookup[0]];
-   	lookupIndices[l_idx][0] = l_idx;
+    // ivec3 lightIdx = lookupIndices[l_idx];
+    ivec2 lightIdx = ivec2(lookupIndices[l_idx][0], lookupIndices[l_idx][1]);
+    // Light light = lights[lightIndexLookup[0]];
+   	// lookupIndices[l_idx][0] = l_idx;
    	
    	// Debug map
-   	if (lightIdx[2] == 0)
+   	if (lightIdx[1] == 0)
    		outColor = vec4(0.f, 0.f, 0.f, 1.f);
    	else 
 	{
 		// outColor = vec4(1.f);
 
-		uint start = 0;
-		uint end = 9;
+		uint start = lightIdx[0];
+		uint end =  lightIdx[0] + lightIdx[1];
+		uint count = 0;
+		// while (count < lightIdx[2]) {
+		// 	// vec4 pos = lights[lightIndexLookup[i]].pos;
+	 //  //   	vec4 col = lights[lightIndexLookup[i]].col;
+	 //  //   	vec3 lightDir = pos.xyz - fragPosition;
+	 //  //   	float distance = length(lightDir);
+	 //  //   	lightDir = lightDir / distance;
+
+	 //  //   	float attenuation = max(0.001f, pos.w - distance);
+
+	 //  //   	float specular = specularLighting(nor, lightDir, viewDir);
+	 //  //   	float diffuse  = clamp(dot(nor, lightDir), 0.001, 1.0);
+
+	 //  //   	color += texture(texSampler, fragTexCoord) * attenuation * vec4(normalize(col.rgb), 1.f) * (specular + diffuse); 
+		// 	count++;
+		// }
+		// lookupIndices[l_idx][1] = int(count + start);
+
 		for (uint i = start; i < end; i++) {
 	    	// Light light = lights[lightIndexLookup[i]];
 
@@ -129,7 +148,7 @@ void main() {
 
 	    	color += texture(texSampler, fragTexCoord) * attenuation * vec4(normalize(col.rgb), 1.f) * (specular + diffuse); 
 	    }
-    	outColor = clamp(1.f * color, 0.001, 1.0);
+    	// outColor = clamp(1.f * color, 0.001, 1.0);
 
 	}
 
@@ -156,7 +175,11 @@ void main() {
 
 
     // Cluster debug
-    // outColor = vec4(normalize(vec3(Sx/X, Sy/Y, minIdx/10.f)), 1.f);
+    // int zz = Sx + Sy * X + Sz * X * Y;
+	// outColor = vec4((vec3(1.f) * (zz % 10))/ 10.0, 1.f);
+
+	// Cluster debug pretty
+    outColor = vec4(normalize(vec3(Sx + 1, Sy + 1, Sz)), 1.f);
 
     // Depth Debug
     // outColor = vec4(vec3(1.f,1.f,1.f) * z_e / 100.f, 1.f);

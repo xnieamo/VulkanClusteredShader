@@ -266,6 +266,7 @@ private:
 				maxz = std::min(std::max(maxz, 0), Z);
 			}
 
+			// Dummy test, fill all lights into z=0 buffer
 			for (int i = 0; i <= X; i++) {
 				for (int j = 0; j <= Y; j++) {
 					//for (int k = minz; k <= maxz; k++) {
@@ -282,13 +283,13 @@ private:
 			//if (inBound(minx, maxx, 0, X) && inBound(miny, maxy, 0, Y)) {
 			//	for (int i = minx; i <= maxx; i++) {
 			//		for (int j = miny; j <= maxy; j++) {
-			//			//for (int k = minz; k <= maxz; k++) {
-			//				int k = 0;
+			//			for (int k = minz; k <= maxz; k++) {
+			//				//int k = 0;
 			//				if (i >= 0 && j >= 0 && k >= 0) {
 			//					numel++;
 			//					clusterIdx[i][j][k].push_back(index);
 			//				}
-			//			//}
+			//			}
 			//		}
 			//	}
 			//}
@@ -296,9 +297,9 @@ private:
 
 
 		int numClusters = (X + 1) * (Y + 1) * (Z + 1);
-		std::vector<glm::ivec3> clusterLookup(numClusters);
+		std::vector<glm::ivec2> clusterLookup(numClusters);
 		std::vector<int> unrolledIdx;
-		//std::cout << clusterLookup[0].size() << std::endl;
+
 		//for (int k = 0; k < Z; k++) {
 			int k = 0;
 			for (int j = 0; j <= Y; j++) {
@@ -306,10 +307,10 @@ private:
 
 					int clustersToAssign = clusterIdx[i][j][k].size();
 					int offset = clustersToAssign > 0 ? unrolledIdx.size() : 0;
-					int idx = i + j * (X + 1);// +k * (Y + 1) * (X + 1);
+					int idx = i + j * (X + 1) + k * (Y + 1) * (X + 1);
 					clusterLookup[idx][0] = offset;
-					clusterLookup[idx][1] = offset + clustersToAssign;
-					clusterLookup[idx][2] = clustersToAssign;
+					clusterLookup[idx][1] = clustersToAssign;
+					//clusterLookup[idx][2] = clustersToAssign;
 					unrolledIdx.insert(unrolledIdx.end(), clusterIdx[i][j][k].begin(), clusterIdx[i][j][k].end());
 
 				}
@@ -319,7 +320,7 @@ private:
 		//std::cout << "Finished Lights!" << std::endl;
 		//std::cout << numel << std::endl;
 
-		VkDeviceSize bufferSize = clusterLookup.size() * sizeof(glm::ivec3);
+		VkDeviceSize bufferSize = clusterLookup.size() * sizeof(glm::ivec2);
 
 		void* data;
 		vkMapMemory(device, clusterDataStagingBufferMemory, 0, bufferSize, 0, &data);
@@ -380,10 +381,9 @@ private:
 		copyBuffer(clusterIndexStagingBuffer, clusterIndexBuffer, bufferSize);
 
 		{
-			std::vector<std::vector<int>> clusterData;
-			clusterData.resize(numberOfClusters, std::vector<int>(2, 0));
+			std::vector<glm::ivec2> clusterData(numberOfClusters);
 
-			VkDeviceSize bufferSize = numberOfClusters * sizeof(glm::ivec3);
+			VkDeviceSize bufferSize = numberOfClusters * sizeof(glm::ivec2);
 
 			createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, clusterDataStagingBuffer, clusterDataStagingBufferMemory);
 
@@ -418,11 +418,11 @@ private:
 			col.b = u01(rng);
 			col.a = 1.f;
 
-			float radius = u01(rng) * 30.f + 1.f;
+			float radius = u01(rng) * 20.f + 1.f;
 			float dist = glm::sqrt(radius * radius / 3.f);
 			lights[i].pos = glm::vec4(pos, radius);
 			lights[i].col = col;
-			lights[i].vel = { 0.05f, 20.f, 0.0f, dist };
+			lights[i].vel = { 0.05f, 30.f, 0.0f, dist };
 		}
 
 		VkDeviceSize bufferSize = lights.size() * sizeof(Light);
@@ -1092,7 +1092,7 @@ private:
 		VkDescriptorBufferInfo clusterData = {};
 		clusterData.buffer = clusterDataBuffer;
 		clusterData.offset = 0;
-		clusterData.range = sizeof(glm::ivec3) * numberOfClusters;
+		clusterData.range = sizeof(glm::ivec2) * numberOfClusters;
 
 		std::array<VkWriteDescriptorSet, 6> descriptorWrites = {};
 
