@@ -35,10 +35,10 @@
 #include "DefaultVkInfo.h"
 
 
-//using namespace SceneStructs;
-
 #define WIDTH 1200
 #define HEIGHT 1000
+#define TILE_SIZE 32
+#define MAX_LIGHTS_PER_CLUSTER 10
 
 const std::string MODEL_PATH = "../../res/models/sponza.obj";
 const std::string TEXTURE_PATH = "../../res/textures/kamen.jpg";
@@ -60,11 +60,12 @@ enum ControlState { NONE = 0, ROTATE, TRANSLATE };
 ControlState mouseState = ControlState::NONE;
 
 glm::vec2 screenPos;
-glm::vec3 trans;
+glm::vec3 trans(0.f, 5.f, 0.f);
 glm::vec2 rotate;
 float scale = 1.f;
 glm::vec3 F, R, U, P;
 
+const float Z_explicit[10] = { 0.1f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f };
 
 class VulkanApplication {
 public:
@@ -154,26 +155,257 @@ private:
 
 	// Allocations for a compute shader to move the lights around
 	VDeleter<VkBuffer> lightStorageA{ device, vkDestroyBuffer };
-	//VDeleter<VkBuffer> lightStorageB{ device, vkDestroyBuffer };
 	VDeleter<VkDeviceMemory> lightStorageAMemory{ device, vkFreeMemory };
-	//VDeleter<VkDeviceMemory> lightStorageBMemory{ device, vkFreeMemory };
 
 	VDeleter<VkDescriptorSetLayout> lightDescriptorSetLayout{ device, vkDestroyDescriptorSetLayout };
 	VDeleter<VkPipelineLayout> lightPipelineLayout{ device, vkDestroyPipelineLayout };
 	VDeleter<VkPipeline> lightPipeline{ device, vkDestroyPipeline };
-	VkDescriptorSet lightDescriptorSets[2];
+	VkDescriptorSet lightDescriptorSet;
 
 	VDeleter<VkCommandPool> lightCommandPool{ device, vkDestroyCommandPool };
 	VkCommandBuffer lightCommandBuffer = VK_NULL_HANDLE;
 
 	VDeleter<VkFence> lightFence{ device, vkDestroyFence };
 
+	// UBO for compute shader
+	VDeleter<VkBuffer> computeUniformStagingBuffer{ device, vkDestroyBuffer };
+	VDeleter<VkDeviceMemory> computeUniformStagingBufferMemory{ device, vkFreeMemory };
+	VDeleter<VkBuffer> computeUniformBuffer{ device, vkDestroyBuffer };
+	VDeleter<VkDeviceMemory> computeUniformBufferMemory{ device, vkFreeMemory };
+
+	// SSBO for cluster lookup index data
+	VDeleter<VkBuffer> clusterIndexBuffer{ device, vkDestroyBuffer };
+	VDeleter<VkDeviceMemory> clusterIndexBufferMemory{ device, vkFreeMemory };
+	VDeleter<VkBuffer> clusterIndexStagingBuffer{ device, vkDestroyBuffer };
+	VDeleter<VkDeviceMemory> clusterIndexStagingBufferMemory{ device, vkFreeMemory };
+
+	VDeleter<VkBuffer> clusterDataBuffer{ device, vkDestroyBuffer };
+	VDeleter<VkDeviceMemory> clusterDataBufferMemory{ device, vkFreeMemory };
+	VDeleter<VkBuffer> clusterDataStagingBuffer{ device, vkDestroyBuffer };
+	VDeleter<VkDeviceMemory> clusterDataStagingBufferMemory{ device, vkFreeMemory };
+
+	int clusterIndexSize;
+	int numberOfClusters;
+	std::vector<Light> lights;
+	std::vector<std::vector<std::vector<std::vector<int>>>> clusterIdx;
+	ComputeUBO cubo = {};
+
+
+	int findZ(float z) {
+
+		float minDiff = 1000000.f;
+		int minIdx = -1;
+		for (int i = 0; i < 10; i++) {
+			float tempDiff = z - Z_explicit[i];
+			if (tempDiff < minDiff && tempDiff >= 0.f) {
+				minDiff = tempDiff;
+				minIdx = i;
+			}
+		}
+		return minIdx;
+	}
+
+	bool inBound(int minVal, int maxVal, int minBound, int maxBound) {
+		return (minVal >= minBound && minVal <= maxBound && maxVal >= minBound && maxVal <= maxBound);
+	}
+
+	void assignLights() {
+		int X = (int)(WIDTH / TILE_SIZE);
+		int Y = (int)(HEIGHT / TILE_SIZE);
+		int Z = 9;
+		clusterIdx.clear();
+		clusterIdx.resize(X+1, std::vector<std::vector<std::vector<int>>>(Y+1, std::vector<std::vector<int>>(Z+1, std::vector<int>())));
+		
+		//std::cout << "All Good so far!" << std::endl;
+		int numel = 0;
+		for (int index = 0; index < 10; index++) {
+			Light l = lights[index];
+			glm::vec4 pos = l.pos;
+			pos[3] = 1.f;
+			float dist = l.vel[3];
+
+			// Bind light in AABB
+			glm::vec4 max = pos + glm::vec4(glm::vec3(dist), 0.f);
+			glm::vec4 min = pos - glm::vec4(glm::vec3(dist), 0.f);
+
+			// 1. Convert AABB to view space
+			max = cubo.proj * cubo.view * cubo.model * max;
+			min = cubo.proj * cubo.view * cubo.model * min;
+			max = max / max.w;
+			min = min / min.w;
+
+			// 2. Convert to screen space 
+			// Max coordinates
+			int maxx = std::min(std::max(int(glm::round((max.x + 1) / 2.f * WIDTH)) / TILE_SIZE, -1), X + 1);
+			int maxy = std::min(std::max(int(glm::round((1 - max.y) / 2.f * HEIGHT)) / TILE_SIZE, -1), Y + 1);
+			int maxz = max.w > 0.f ? findZ(max.z) : -1;
+
+			// Min coordinates
+			int minx = std::min(std::max(int(glm::round((min.x + 1) / 2.f * WIDTH)) / TILE_SIZE, -1), X + 1);
+			int miny = std::min(std::max(int(glm::round((1 - min.y) / 2.f * HEIGHT)) / TILE_SIZE, -1), Y + 1);
+			int minz = min.w > 0.f ? findZ(min.z) : -1;
+
+			// Swap max and min if they do not hold actual values
+			if (minx > maxx) { std::swap(minx, maxx); }
+			if (miny > maxy) { std::swap(miny, maxy); }
+			if (minz > maxz) { std::swap(minz, maxz); }
+			
+			// Update clamping condition if min > minBound || max < maxBound
+			if (minx >= 0 || maxx <= X) {
+				minx = std::min(std::max(minx, 0), X);
+				maxx = std::min(std::max(maxx, 0), X);
+			}
+
+			if (miny >= 0 || maxy <= Y) {
+				miny = std::min(std::max(miny, 0), Y);
+				maxy = std::min(std::max(maxy, 0), Y);
+			}
+
+			if (minz >= 0 || maxz <= Z) {
+				minz = std::min(std::max(minz, 0), Z);
+				maxz = std::min(std::max(maxz, 0), Z);
+			}
+
+			for (int i = 0; i <= X; i++) {
+				for (int j = 0; j <= Y; j++) {
+					//for (int k = minz; k <= maxz; k++) {
+					int k = 0;
+					if (i >= 0 && j >= 0 && k >= 0) {
+						numel++;
+						clusterIdx[i][j][k].push_back(index);
+					}
+					//}
+				}
+			}
+			
+			//// 3. Fill index buffer by traversing AABB only if everything is inbounds though
+			//if (inBound(minx, maxx, 0, X) && inBound(miny, maxy, 0, Y)) {
+			//	for (int i = minx; i <= maxx; i++) {
+			//		for (int j = miny; j <= maxy; j++) {
+			//			//for (int k = minz; k <= maxz; k++) {
+			//				int k = 0;
+			//				if (i >= 0 && j >= 0 && k >= 0) {
+			//					numel++;
+			//					clusterIdx[i][j][k].push_back(index);
+			//				}
+			//			//}
+			//		}
+			//	}
+			//}
+		}
+
+
+		int numClusters = (X + 1) * (Y + 1) * (Z + 1);
+		std::vector<glm::ivec3> clusterLookup(numClusters);
+		std::vector<int> unrolledIdx;
+		//std::cout << clusterLookup[0].size() << std::endl;
+		//for (int k = 0; k < Z; k++) {
+			int k = 0;
+			for (int j = 0; j <= Y; j++) {
+				for (int i = 0; i <= X; i++) {
+
+					int clustersToAssign = clusterIdx[i][j][k].size();
+					int offset = clustersToAssign > 0 ? unrolledIdx.size() : 0;
+					int idx = i + j * (X + 1);// +k * (Y + 1) * (X + 1);
+					clusterLookup[idx][0] = offset;
+					clusterLookup[idx][1] = offset + clustersToAssign;
+					clusterLookup[idx][2] = clustersToAssign;
+					unrolledIdx.insert(unrolledIdx.end(), clusterIdx[i][j][k].begin(), clusterIdx[i][j][k].end());
+
+				}
+			}
+		//}
+		unrolledIdx.resize(clusterIndexSize);
+		//std::cout << "Finished Lights!" << std::endl;
+		//std::cout << numel << std::endl;
+
+		VkDeviceSize bufferSize = clusterLookup.size() * sizeof(glm::ivec3);
+
+		void* data;
+		vkMapMemory(device, clusterDataStagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, clusterLookup.data(), (size_t)bufferSize);
+		vkUnmapMemory(device, clusterDataStagingBufferMemory);
+
+		copyBuffer(clusterDataStagingBuffer, clusterDataBuffer, bufferSize);
+
+		{
+			VkDeviceSize bufferSize = unrolledIdx.size() * sizeof(int);
+
+			void* data;
+			vkMapMemory(device, clusterIndexStagingBufferMemory, 0, bufferSize, 0, &data);
+			memcpy(data, unrolledIdx.data(), (size_t)bufferSize);
+			vkUnmapMemory(device, clusterIndexStagingBufferMemory);
+
+			copyBuffer(clusterIndexStagingBuffer, clusterIndexBuffer, bufferSize);
+		}
+
+	}
+
+	void updateClusterDataBuffer() {
+		std::vector<std::vector<int>> clusterData;
+		clusterData.resize(numberOfClusters, std::vector<int>(2, 0));
+
+		VkDeviceSize bufferSize = numberOfClusters * 2 * sizeof(int);
+
+		void* data;
+		vkMapMemory(device, clusterDataStagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, clusterData.data(), (size_t)bufferSize);
+		vkUnmapMemory(device, clusterDataStagingBufferMemory);
+
+		copyBuffer(clusterDataStagingBuffer, clusterDataBuffer, bufferSize);
+	}
+
+	void createClusterIndexStorageBuffers() {
+		int X = (int)(WIDTH / TILE_SIZE) + 1;
+		int Y = (int)(HEIGHT / TILE_SIZE) + 1;
+		int Z = 10;
+		clusterIndexSize = X * Y * Z * MAX_LIGHTS_PER_CLUSTER;
+		numberOfClusters = X * Y * Z;
+
+		std::vector<int> clusterLookup;
+		clusterLookup.resize(clusterIndexSize, 0);
+
+		VkDeviceSize bufferSize = clusterIndexSize * sizeof(int);
+
+
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, clusterIndexStagingBuffer, clusterIndexStagingBufferMemory);
+
+		void* data;
+		vkMapMemory(device, clusterIndexStagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, clusterLookup.data(), (size_t)bufferSize);
+		vkUnmapMemory(device, clusterIndexStagingBufferMemory);
+
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, clusterIndexBuffer, clusterIndexBufferMemory);
+
+		copyBuffer(clusterIndexStagingBuffer, clusterIndexBuffer, bufferSize);
+
+		{
+			std::vector<std::vector<int>> clusterData;
+			clusterData.resize(numberOfClusters, std::vector<int>(2, 0));
+
+			VkDeviceSize bufferSize = numberOfClusters * sizeof(glm::ivec3);
+
+			createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, clusterDataStagingBuffer, clusterDataStagingBufferMemory);
+
+			void* data;
+			vkMapMemory(device, clusterDataStagingBufferMemory, 0, bufferSize, 0, &data);
+			memcpy(data, clusterData.data(), (size_t)bufferSize);
+			vkUnmapMemory(device, clusterDataStagingBufferMemory);
+
+			createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, clusterDataBuffer, clusterDataBufferMemory);
+
+			copyBuffer(clusterDataStagingBuffer, clusterDataBuffer, bufferSize);
+		}
+		
+
+	}
+
 	void createComputeLightMoveBuffers(){
 		// Create the lights
 		std::default_random_engine rng;
 		std::uniform_real_distribution<float> u01(0.f, 1.f);
 		
-		std::vector<Light> lights(numLights);
+		lights.resize(numLights);
 		for (int i = 0; i < numLights; i++) {
 			glm::vec3 pos;
 			pos.x = (u01(rng) - 0.5f) * 20.f;
@@ -186,9 +418,11 @@ private:
 			col.b = u01(rng);
 			col.a = 1.f;
 
-			lights[i].pos = glm::vec4(pos, u01(rng) * 10.f + 1.f);
+			float radius = u01(rng) * 30.f + 1.f;
+			float dist = glm::sqrt(radius * radius / 3.f);
+			lights[i].pos = glm::vec4(pos, radius);
 			lights[i].col = col;
-			lights[i].vel = { 0.1f, 40.f, 0.0f, 0.0f };
+			lights[i].vel = { 0.05f, 20.f, 0.0f, dist };
 		}
 
 		VkDeviceSize bufferSize = lights.size() * sizeof(Light);
@@ -214,7 +448,13 @@ private:
 		storageBufferABinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 		storageBufferABinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-		std::array<VkDescriptorSetLayoutBinding, 1> bindings = { storageBufferABinding };
+		VkDescriptorSetLayoutBinding computeUniformBinding = {};
+		computeUniformBinding.binding = 3;
+		computeUniformBinding.descriptorCount = 1;
+		computeUniformBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		computeUniformBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+		std::array<VkDescriptorSetLayoutBinding, 2> bindings = { storageBufferABinding, computeUniformBinding };
 		VkDescriptorSetLayoutCreateInfo layoutInfo = {};
 		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 		layoutInfo.bindingCount = bindings.size();
@@ -271,14 +511,14 @@ private:
 	}
 
 	void createLightDescriptorSet(){
-		VkDescriptorSetLayout layouts[] = { lightDescriptorSetLayout, lightDescriptorSetLayout };
+		VkDescriptorSetLayout layouts[] = { lightDescriptorSetLayout };
 		VkDescriptorSetAllocateInfo allocInfo = {};
 		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
 		allocInfo.descriptorPool = descriptorPool;
-		allocInfo.descriptorSetCount = 2;
+		allocInfo.descriptorSetCount = 1;
 		allocInfo.pSetLayouts = layouts;
 
-		if (vkAllocateDescriptorSets(device, &allocInfo, lightDescriptorSets) != VK_SUCCESS) {
+		if (vkAllocateDescriptorSets(device, &allocInfo, &lightDescriptorSet) != VK_SUCCESS) {
 			throw std::runtime_error("failed to allocate descriptor set!");
 		}
 
@@ -287,10 +527,15 @@ private:
 		bufferA.offset = 0;
 		bufferA.range = sizeof(Light) * numLights;
 
+		VkDescriptorBufferInfo computeUniform = {};
+		computeUniform.buffer = computeUniformBuffer;
+		computeUniform.offset = 0;
+		computeUniform.range = sizeof(ComputeUBO); 
+
 		std::array<VkWriteDescriptorSet, 2> descriptorWrites = {};
 
 		descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		descriptorWrites[0].dstSet = lightDescriptorSets[0];
+		descriptorWrites[0].dstSet = lightDescriptorSet;
 		descriptorWrites[0].dstBinding = 0;
 		descriptorWrites[0].dstArrayElement = 0;
 		descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -298,12 +543,12 @@ private:
 		descriptorWrites[0].pBufferInfo = &bufferA;
 
 		descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		descriptorWrites[1].dstSet = lightDescriptorSets[1];
-		descriptorWrites[1].dstBinding = 0;
+		descriptorWrites[1].dstSet = lightDescriptorSet;
+		descriptorWrites[1].dstBinding = 3;
 		descriptorWrites[1].dstArrayElement = 0;
-		descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 		descriptorWrites[1].descriptorCount = 1;
-		descriptorWrites[1].pBufferInfo = &bufferA;
+		descriptorWrites[1].pBufferInfo = &computeUniform;
 
 		vkUpdateDescriptorSets(device, descriptorWrites.size(), descriptorWrites.data(), 0, nullptr);
 	}
@@ -351,7 +596,7 @@ private:
 
 		vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
 		vkCmdBindPipeline(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipeline);
-		vkCmdBindDescriptorSets(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipelineLayout, 0, 1, lightDescriptorSets, 0, 0);
+		vkCmdBindDescriptorSets(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipelineLayout, 0, 1, &lightDescriptorSet, 0, 0);
 		vkCmdDispatch(lightCommandBuffer, numLights / 16, 1, 1);
 
 		bufferBarrier.srcAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
@@ -447,10 +692,12 @@ private:
 		createIndexBuffer();
 		createUniformBuffer(sizeof(UniformBufferObject), uniformStagingBuffer, uniformStagingBufferMemory, uniformBuffer, uniformBufferMemory);
 		createUniformBuffer(sizeof(uboLights), lightStagingBuffer, lightStagingBufferMemory, lightBuffer, lightBufferMemory);
+		createUniformBuffer(sizeof(ComputeUBO), computeUniformStagingBuffer, computeUniformStagingBufferMemory, computeUniformBuffer, computeUniformBufferMemory);
 		
 		// Lights
 		createLights();
 
+		createClusterIndexStorageBuffers();
 		createComputeLightMoveBuffers();
 		createLightDescriptorSetLayout();
 
@@ -474,9 +721,11 @@ private:
 		while (!glfwWindowShouldClose(window)) {
 			glfwPollEvents();
 
+			//updateClusterDataBuffer();
 			updateUniformBuffer();
 			updateLightBuffer();
 			drawFrame();
+			assignLights();
 		}
 
 		vkDeviceWaitIdle(device);
@@ -547,11 +796,7 @@ private:
 		float time = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - startTime).count() / 1000.0f;
 
 		UniformBufferObject ubo = {};
-		// Model positions
-		//ubo.model = glm::rotate(glm::mat4(), glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-		//ubo.model = glm::inverse(glm::translate(trans)
-		//	* glm::rotate(rotate[0], glm::vec3(1.0f, 0.0f, 0.0f))
-		//	* glm::rotate(rotate[1], glm::vec3(0.0f, 1.0f, 0.0f)));
+		
 
 		F.x = cos(glm::radians(rotate[1])) * cos(glm::radians(rotate[0]));
 		F.y = sin(glm::radians(rotate[0]));
@@ -574,6 +819,26 @@ private:
 		vkUnmapMemory(device, uniformStagingBufferMemory);
 
 		copyBuffer(uniformStagingBuffer, uniformBuffer, sizeof(ubo));
+
+		// Compute shader ubo
+		cubo.view = ubo.view;
+		cubo.proj = ubo.proj;
+		cubo.model = ubo.model;
+		cubo.height = HEIGHT;
+		cubo.width = WIDTH;
+		cubo.xtiles = int(WIDTH / TILE_SIZE) + 1;
+		cubo.ytiles = int(HEIGHT / TILE_SIZE) + 1;
+		cubo.max_lights_per_cluster = MAX_LIGHTS_PER_CLUSTER;
+		cubo.number_lights = numLights;
+		cubo.tile_size = TILE_SIZE;
+
+		void* cdata;
+		vkMapMemory(device, computeUniformStagingBufferMemory, 0, sizeof(cubo), 0, &cdata);
+		memcpy(cdata, &cubo, sizeof(cubo));
+		vkUnmapMemory(device, computeUniformStagingBufferMemory);
+
+		copyBuffer(computeUniformStagingBuffer, computeUniformBuffer, sizeof(cubo));
+
 	}
 
 	// This function should do the following things:
@@ -637,6 +902,9 @@ private:
 			throw std::runtime_error("failed to submit draw command buffer!");
 		}
 
+		//vkWaitForFences(device, 1, &lightFence, VK_TRUE, UINT64_MAX);
+		//vkResetFences(device, 1, &lightFence);
+
 		VkPresentInfoKHR presentInfo = {};
 		presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 
@@ -658,8 +926,6 @@ private:
 		else if (result != VK_SUCCESS) {
 			throw std::runtime_error("failed to present swap chain image!");
 		}
-
-		std::swap(lightDescriptorSets[1], lightDescriptorSets[0]);
 	}
 
 	// End draw updates
@@ -710,13 +976,6 @@ private:
 
 	// End creating lights
 
-	/***********************************
-	*          Compute Shader          *
-	************************************/
-
-
-	// End Compute shader
-
 
 	/***********************************
 	*    Descriptor Set and Layout     *
@@ -750,7 +1009,19 @@ private:
 		normapLayoutBinding.pImmutableSamplers = nullptr;
 		normapLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-		std::array<VkDescriptorSetLayoutBinding, 4> bindings = { uboLayoutBinding, samplerLayoutBinding, lightLayoutBinding, normapLayoutBinding };
+		VkDescriptorSetLayoutBinding clusterLookupBinding = {};
+		clusterLookupBinding.binding = 4;
+		clusterLookupBinding.descriptorCount = 1;
+		clusterLookupBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		clusterLookupBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+		VkDescriptorSetLayoutBinding clusterDataBinding = {};
+		clusterDataBinding.binding = 5;
+		clusterDataBinding.descriptorCount = 1;
+		clusterDataBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		clusterDataBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+		std::array<VkDescriptorSetLayoutBinding, 6> bindings = { uboLayoutBinding, samplerLayoutBinding, lightLayoutBinding, normapLayoutBinding, clusterLookupBinding, clusterDataBinding };
 		VkDescriptorSetLayoutCreateInfo layoutInfo = {};
 		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 		layoutInfo.bindingCount = bindings.size();
@@ -813,7 +1084,17 @@ private:
 		norMapInfo.imageView = norMapImageView;
 		norMapInfo.sampler = norMapSampler;
 
-		std::array<VkWriteDescriptorSet, 4> descriptorWrites = {};
+		VkDescriptorBufferInfo clusterLookup = {};
+		clusterLookup.buffer = clusterIndexBuffer;
+		clusterLookup.offset = 0;
+		clusterLookup.range = sizeof(int) * clusterIndexSize;
+
+		VkDescriptorBufferInfo clusterData = {};
+		clusterData.buffer = clusterDataBuffer;
+		clusterData.offset = 0;
+		clusterData.range = sizeof(glm::ivec3) * numberOfClusters;
+
+		std::array<VkWriteDescriptorSet, 6> descriptorWrites = {};
 
 		descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		descriptorWrites[0].dstSet = descriptorSet;
@@ -846,6 +1127,22 @@ private:
 		descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		descriptorWrites[3].descriptorCount = 1;
 		descriptorWrites[3].pImageInfo = &norMapInfo;
+
+		descriptorWrites[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrites[4].dstSet = descriptorSet;
+		descriptorWrites[4].dstBinding = 4;
+		descriptorWrites[4].dstArrayElement = 0;
+		descriptorWrites[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		descriptorWrites[4].descriptorCount = 1;
+		descriptorWrites[4].pBufferInfo = &clusterLookup;
+
+		descriptorWrites[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrites[5].dstSet = descriptorSet;
+		descriptorWrites[5].dstBinding = 5;
+		descriptorWrites[5].dstArrayElement = 0;
+		descriptorWrites[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		descriptorWrites[5].descriptorCount = 1;
+		descriptorWrites[5].pBufferInfo = &clusterData;
 
 		vkUpdateDescriptorSets(device, descriptorWrites.size(), descriptorWrites.data(), 0, nullptr);
 	}

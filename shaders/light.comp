@@ -10,32 +10,203 @@ struct Light
 	vec4 vel;
 };
 
-// LOOK: These bindings correspond to the DescriptorSetLayouts and
-// the DescriptorSets from prepareCompute()!
 
-// Binding 0 : Particle storage buffer (read)
-layout(std140, binding = 0) buffer LightsA
+layout(std430, binding = 0) buffer LightsA
 {
-	Light LightsA1[];
+	Light lights[];
 };
 
+// layout(std430, binding = 1) buffer Clusters
+// {
+// 	uint lightIndexLookup[];
+// };
+
+// layout(std430, binding = 2) buffer ClustersData
+// {
+// 	ivec2 lookupIndices[];
+// 	// uint lookupIndices[][2];
+// };
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
+layout(binding = 3) uniform UniformBufferObject {
+	int height;
+    int width;
+    int xtiles;
+    int ytiles;
+    int max_lights_per_cluster;
+    int number_lights;
+    int tile_size;
+    mat4 model;
+    mat4 view;
+    mat4 proj;
+
+} ubo;
+
+const float Z_explicit[10] = {0.1f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f};
+int findZ (float z) {
+
+    float minDiff = 1000000.f;
+    int minIdx = -1;
+    for (int i = 0; i < 10; i++) {
+    	float tempDiff = z - Z_explicit[i];
+    	if (tempDiff < minDiff && tempDiff >= 0.f) {
+    		minDiff = tempDiff;
+    		minIdx = i;
+    	}
+    }
+	return minIdx;
+}
+
+bool inBound(int minVal, int maxVal, int minBound, int maxBound) {
+	return (minVal >= minBound && minVal <= maxBound && maxVal >= maxBound && maxVal <= maxBound);
+}
+
+shared uint counter;
+shared uint maxIndex;
+
 void main()
 {
-
+	counter = 0;
+	maxIndex = 0;
 	// Current SSBO index
 	uint index = gl_GlobalInvocationID.x;
 	// Don't try to write beyond particle count
-	if (index >= 100)
+	if (index >= ubo.number_lights)
 		return;
 
-	vec4 pos = LightsA1[index].pos;
-	vec4 vel = LightsA1[index].vel;
+	// Update velocity
+	vec4 pos = lights[index].pos;
+	vec4 vel = lights[index].vel;
 	pos[1] += vel[0];
 	if (pos[1] >= vel[1])
 		pos[1] = vel[2];
 
-	LightsA1[index].pos = pos;
+	lights[index].pos = pos;
+
+	// uint test = lightIndexLookup[0];
+	// uint test2 = lookupIndices[0][0];
+
+	// // Allocate light to clusters
+	
+	// // Find cluster index
+	// // Bind light in AABB
+	// float dist = vel[3];
+	// pos[3] = 1.f;
+	// vec4 posMax = pos + vec4(vec3(dist), 0.f);
+	// vec4 posMin = pos - vec4(vec3(dist), 0.f);
+
+	// // 1. Convert AABB to view space
+	// vec4 viewMax = ubo.proj * ubo.view * ubo.model * posMax;
+	// vec4 viewMin = ubo.proj * ubo.view * ubo.model * posMin;
+
+	// viewMax = viewMax / viewMax.w;
+	// viewMin = viewMin / viewMin.w;
+
+	// // 2a. Find max number of tiles
+	// int X = ubo.width / ubo.tile_size;
+	// int Y = ubo.height / ubo.tile_size;
+
+	// // 2. Convert to screen space 
+	// // Max coordinates
+	// int Sx_p = clamp(int(round((viewMax.x + 1) / 2.f * ubo.width)) / ubo.tile_size, -1, X + 1);
+	// int Sy_p = clamp(int(round((1 - viewMax.y) / 2.f * ubo.height))/ ubo.tile_size, -1, Y + 1);
+	// int Sz_p = viewMax.w > 0.f ? findZ(viewMax.z) : -1;
+
+	// // Min coordinates
+	// int Sx_m = clamp(int(round((viewMin.x + 1) / 2.f * ubo.width)) / ubo.tile_size, -1, X + 1);
+	// int Sy_m = clamp(int(round((1 - viewMin.y) / 2.f * ubo.height))/ ubo.tile_size, -1, Y + 1);
+	// int Sz_m = viewMin.w > 0.f ? findZ(viewMin.z) : -1;
+
+	// // 
+
+	// // Swap max and min if they do not hold actual values
+	// if (Sx_m > Sx_p) {
+	// 	int temp = Sx_m;
+	// 	Sx_m = Sx_p;
+	// 	Sx_p = temp;
+	// }
+
+	// if (Sy_m > Sy_p) {
+	// 	int temp = Sy_m;
+	// 	Sy_m = Sy_p;
+	// 	Sy_p = temp;
+	// }
+
+	// if (Sz_m > Sz_p) {
+	// 	int temp = Sz_m;
+	// 	Sz_m = Sz_p;
+	// 	Sz_p = temp;
+	// }
+
+	// // Update clamping condition if min > minBound || max < maxBound
+	// if (Sx_m >= 0 || Sx_p <= X) {
+	// 	Sx_m = clamp(Sx_m, 0, X);
+	// 	Sx_p = clamp(Sx_p, 0, X);
+	// }
+
+	// if (Sy_m >= 0 || Sy_p <= Y) {
+	// 	Sy_m = clamp(Sy_m, 0, Y);
+	// 	Sy_p = clamp(Sy_p, 0, Y);
+	// }
+
+	// if (Sz_m >= 0 || Sz_p <= Y) {
+	// 	Sz_m = clamp(Sz_m, 0, Y);
+	// 	Sz_p = clamp(Sz_p, 0, Y);
+	// }
+
+	// // Need to initialize EVERYTHING TO 0 ... IDK WHY
+	// int totalNum = ubo.ytiles * ubo.ytiles * 10;
+	// uint start = min((totalNum / 96 + 1) * index, totalNum);
+	// uint end   = min((totalNum / 96 + 1) * (index + 1), totalNum);
+	// for (uint i = start; i < end; i++) {
+	// 	lookupIndices[i][0] = 0;
+	// 	lookupIndices[i][1] = 0;
+	// }
+
+	// barrier();
+
+	// // lookupIndices[index][1] = inBound(Sy_m, Sy_p, 0, Y) ? uint(Sy_p - Sy_m) : 0;
+	// // lookupIndices[index][0] = inBound(Sx_m, Sx_p, 0, X) ? uint(Sx_p - Sx_m) : 0;
+	// // lookupIndices[index][0] = Sx_m;
+	// // lookupIndices[index][1] = Sx_p;
+	// // lookupIndices[index][2] = Sy_m;
+	// // lookupIndices[index][3] = Sy_p;
+	// // lookupIndices[index][4] = Sz_m;
+
+	// // lookupIndices[index][0] = 0;
+	// // lookupIndices[index][5] = 0;
+	// // lookupIndices[index][4] = 0;
+
+
+
+
+	// // if (inBound(Sx_m, Sx_p, 0, X) && inBound(Sy_m, Sy_p, 0, Y))
+	// // 	lookupIndices[index][5] = (Sx_p - Sx_m + 1) * (Sy_p - Sy_m + 1) * (Sz_p - Sz_m + 1);
+
+	// // 3. Fill index buffer by traversing AABB only if everything is inbounds though
+	// if (inBound(Sx_m, Sx_p, 0, X) && inBound(Sy_m, Sy_p, 0, Y)) {
+	// 	for (int i = Sx_m; i <= Sx_p; i++) {
+	// 		for (int j = Sy_m; j <= Sy_m; j++) {
+	// 			for (int k = Sz_m; k <= Sz_p; k++) {
+	// 				// Unroll 3D index
+	// 				uint clusterIdx = i + j * ubo.ytiles + k * ubo.ytiles * ubo.xtiles;
+
+	// 				// Increment counter and save max counter
+	// 				atomicAdd(lookupIndices[clusterIdx][0], 1);
+	// 				lookupIndices[index][1] =  lookupIndices[clusterIdx][0];
+
+	// 				// // Find where in the buffer this location is
+	// 				// uint trueLookupIndex = clusterIdx * (ubo.max_lights_per_cluster) + l_index;
+
+	// 				// // Assign light to appropriate counter and save where we stop
+	// 				// lightIndexLookup[index]++;
+	// 				// // atomicMax(lookupIndices[clusterIdx][1], l_index);
+	// 				// lookupIndices[index][1]++;
+	// 			}
+	// 		}
+	// 	}
+	// }
+
+	
 }

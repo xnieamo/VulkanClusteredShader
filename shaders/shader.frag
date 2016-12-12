@@ -20,10 +20,23 @@ struct Light
 	vec4 vel;
 };
 
-layout(std140, binding = 2) buffer LightsA
+layout(std430, binding = 2) buffer LightsA
 {
 	Light lights[];
 };
+
+layout(std430, binding = 4) buffer Clusters
+{
+	uint lightIndexLookup[];
+};
+
+layout(std430, binding = 5) buffer ClustersData
+{
+	ivec3 lookupIndices[];
+	// uint lookupIndices[][2];
+};
+
+layout(origin_upper_left) in vec4 gl_FragCoord;
 
 int numLights = 100;
 const float Z_explicit[10] = {0.1f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f};
@@ -45,6 +58,20 @@ float specularLighting(vec3 normal, vec3 lightDir, vec3 viewDir) {
     return pow(specAngle, 0.01) * 0.01;
 }
 
+int findZ (float z) {
+
+    float minDiff = 1000000.f;
+    int minIdx = -1;
+    for (int i = 0; i < 10; i++) {
+    	float tempDiff = z - Z_explicit[i];
+    	if (tempDiff < minDiff && tempDiff >= 0.f) {
+    		minDiff = tempDiff;
+    		minIdx = i;
+    	}
+    }
+	return minIdx;
+}
+
 void main() {
     
 	vec4 color;
@@ -54,26 +81,12 @@ void main() {
 	vec3 viewDir = normalize(camPos - fragPosition);
 	
 
-    for (int i = 0; i < numLights; i++) {
-    	vec4 pos = lights[i].pos;
-    	vec3 lightDir = pos.xyz - fragPosition;
-    	float distance = length(lightDir);
-    	lightDir = lightDir / distance;
-
-    	float attenuation = max(0.001f, pos.w - distance);
-
-    	float specular = specularLighting(nor, lightDir, viewDir);
-    	float diffuse  = clamp(dot(nor, lightDir), 0.001, 1.0);
-
-    	color += texture(texSampler, fragTexCoord) * attenuation * vec4(normalize(lights[i].col.rgb), 1.f) * (specular + diffuse); 
-    }
-
-    // Find screen space tile
+	// Find screen space tile
     int Sx = int(gl_FragCoord.x / 32);
     int Sy = int(gl_FragCoord.y / 32);
 
-    float X = float(WIDTH / 32);
-    float Y = float(HEIGHT / 32);
+    int X = int(WIDTH / 32) + 1;
+    int Y = int(HEIGHT / 32) + 1;
 
     // Find Z cluster
     // http://stackoverflow.com/questions/6652253/getting-the-true-z-value-from-the-depth-buffer
@@ -83,19 +96,67 @@ void main() {
     float z_n = 2.0 * z_b - 1.0;
     float z_e = 2.0 * zNear * zFar / (zFar + zNear - z_n * (zFar - zNear));
 
-    float minDiff = 1000000.f;
-    int minIdx = -1;
-    for (int i = 0; i < 10; i++) {
-    	float tempDiff = abs(Z_explicit[i] - z_e);
-    	if (tempDiff < minDiff) {
-    		minDiff = tempDiff;
-    		minIdx = i;
-    	}
-    }
+    // Find Z cluster index
+    int Sz = findZ(z_e);
+
+    int l_idx = Sx + Sy * X;// + Sz * X * Y;
+    ivec3 lightIdx = lookupIndices[l_idx];
+    Light light = lights[lightIndexLookup[0]];
+   	lookupIndices[l_idx][0] = l_idx;
+   	
+   	// Debug map
+   	if (lightIdx[2] == 0)
+   		outColor = vec4(0.f, 0.f, 0.f, 1.f);
+   	else 
+	{
+		// outColor = vec4(1.f);
+
+		uint start = 0;
+		uint end = 9;
+		for (uint i = start; i < end; i++) {
+	    	// Light light = lights[lightIndexLookup[i]];
+
+	    	vec4 pos = lights[lightIndexLookup[i]].pos;
+	    	vec4 col = lights[lightIndexLookup[i]].col;
+	    	vec3 lightDir = pos.xyz - fragPosition;
+	    	float distance = length(lightDir);
+	    	lightDir = lightDir / distance;
+
+	    	float attenuation = max(0.001f, pos.w - distance);
+
+	    	float specular = specularLighting(nor, lightDir, viewDir);
+	    	float diffuse  = clamp(dot(nor, lightDir), 0.001, 1.0);
+
+	    	color += texture(texSampler, fragTexCoord) * attenuation * vec4(normalize(col.rgb), 1.f) * (specular + diffuse); 
+	    }
+    	outColor = clamp(1.f * color, 0.001, 1.0);
+
+	}
+
+
+ //    // Real 
+ //    for (int i = 0; i < 10; i++) {
+
+ //    	vec4 pos = lights[lightIndexLookup[i]].pos;
+ //    	vec4 col = lights[lightIndexLookup[i]].col;
+ //    	vec3 lightDir = pos.xyz - fragPosition;
+ //    	float distance = length(lightDir);
+ //    	lightDir = lightDir / distance;
+
+ //    	float attenuation = max(0.001f, pos.w - distance);
+
+ //    	float specular = specularLighting(nor, lightDir, viewDir);
+ //    	float diffuse  = clamp(dot(nor, lightDir), 0.001, 1.0);
+
+ //    	color += texture(texSampler, fragTexCoord) * attenuation * vec4(normalize(col.rgb), 1.f) * (specular + diffuse); 
+ //    }
+	// // Actual output color
+ //    outColor = clamp(1.f * color, 0.001, 1.0);
+
 
 
     // Cluster debug
-    outColor = vec4(normalize(vec3(Sx/X, Sy/Y, minIdx/10.f)), 1.f);
+    // outColor = vec4(normalize(vec3(Sx/X, Sy/Y, minIdx/10.f)), 1.f);
 
     // Depth Debug
     // outColor = vec4(vec3(1.f,1.f,1.f) * z_e / 100.f, 1.f);
@@ -103,7 +164,6 @@ void main() {
     // Normal Debug
     // outColor = vec4(nor, 1.f);
 
-    // Actual output color
-    // outColor = clamp(1.f * color, 0.001, 1.0);// + 0.2 * texture(texSampler, fragTexCoord);
+
 
 }
