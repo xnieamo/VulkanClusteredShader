@@ -139,9 +139,9 @@ void main() {
 		vec2 screenFrustum[4];
 
 		screenFrustum[0] = vec2( tileID * TILE_SIZE );
-	    screenFrustum[1] = vec2( tileID.x + 1, tileID.y );
-	    screenFrustum[2] = vec2( tileID.x, tileID.y + 1 );
-	    screenFrustum[3] = vec2( tileID.x + 1, tileID.y + 1 );
+	    screenFrustum[1] = vec2( tileID.x + 1.0, tileID.y );
+	    screenFrustum[2] = vec2( tileID.x, tileID.y + 1.0 );
+	    screenFrustum[3] = vec2( tileID.x + 1.0, tileID.y + 1.0 );
 
 	    // Convert to view space
 	    vec3 viewFrustum[4];
@@ -205,14 +205,11 @@ void main() {
 		if (inFrustum && depth >= 0.01) {
 			// Add index to the shared array of visible indices
 			uint offset = atomicAdd(visibleLightCount, 1);
-			visibleLightIndices[offset] = int(lightIndex);
-			// visibleLightIndices[offset] = int(position.w * 100);
+			// visibleLightIndices[offset] = int(lightIndex);
+			visibleLightIndices[offset] = int(depth * 100);
 		}
 	}
 
-	// uint l_offset = atomicAdd(visibleLightCount, 1);
-	// visibleLightIndices[l_offset] = int(l_offset);
-	
 	barrier();
 
 

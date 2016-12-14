@@ -34,7 +34,7 @@ layout(std430, binding = 5) buffer ClustersData
 {
 	// ivec2 lookupIndices[];
 	int lookupIndices[][2];
-};
+} clusterTable;
 
 layout(origin_upper_left) in vec4 gl_FragCoord;
 
@@ -90,28 +90,32 @@ void main() {
 
     // Find Z cluster
     // http://stackoverflow.com/questions/6652253/getting-the-true-z-value-from-the-depth-buffer
-    // float zNear = 0.1f;
-    // float zFar  = 100.f;
-    // float z_b = gl_FragCoord.z;
-    // float z_n = 2.0 * z_b - 1.0;
-    // float z_e = 2.0 * zNear * zFar / (zFar + zNear - z_n * (zFar - zNear));
-    // int Sz = findZ(z_e);
+
+    float zNear = 0.1f;
+    float zFar  = 100.f;
+    float z_b = gl_FragCoord.z;
+    float z_n = 2.0 * z_b - 1.0;
+    float z_e = 2.0 * zNear * zFar / (zFar + zNear - z_n * (zFar - zNear));
+    int Sz = findZ(z_e);
 
     // Find unrolled index
-    int l_idx = Sx + Sy * X;// + Sz * X * Y;
+    int l_idx = Sx + Sy * X + Sz * X * Y;
+    // int l_idx2 = Sx + Sy * X + Sz * X * Y;
+    // clusterTable.lookupIndices[l_idx][0] = int(Sz);
+    // int[] lightIdx = clusterTable.lookupIndices[l_idx];
 
    	// Debug map
    	// AFDSHFBAISDFHLKSDFHKLSDFHKLSFHKLDFHLKJDS LOOK HERE ALJF:LDSHF:LSDJFL:SDJGL:KDSJG:LSDGJL:KDFJ
    	// DSFL:SDJFL:SDKFJKDS:FJ :LDSJKFL:JDSLFKJ FLIP BOOL LAK:JFD:LDSKJF:LDSKJF:LDSKFJ:LDSKJF:LDSJF:
-   	if (true)
+   	if (false)
    		outColor = vec4(0.f, 0.f, 0.f, 1.f);
    	else 
 	{
 
 		// uint start = lightIdx[0];
 		// uint end =  lightIdx[0] + lightIdx[1];
-		uint start = l_idx * 10;
-		uint end = l_idx * 10 + 50;
+		uint start = l_idx * 50;
+		uint end = l_idx * 50 + 50;
 
 		for (uint i = start; i < end; i++) {
 			int light_index = lookupIndexBuffer.data[i];

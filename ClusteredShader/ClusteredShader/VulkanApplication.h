@@ -39,6 +39,7 @@
 #define HEIGHT 1000
 #define TILE_SIZE 32
 #define MAX_LIGHTS_PER_CLUSTER 50
+#define CPU_CULL 0
 
 const std::string MODEL_PATH = "../../res/models/sponza.obj";
 const std::string TEXTURE_PATH = "../../res/textures/kamen.jpg";
@@ -284,10 +285,6 @@ private:
 			//std::cout << "Min: " << min_screen[0] << " " << min_screen[1] << " " << min_screen[2] << std::endl;
 			//std::cout << "Max: " << max_screen[0] << " " << max_screen[1] << " " << max_screen[2] << std::endl;
 
-			//min_screen[0] = 0;
-			//max_screen[0] = X;
-			//min_screen[1] = 0;
-			//max_screen[1] = Y;
 			// Loop over indices and add light to buffer
 			if (inBound(min_screen[0], max_screen[0], 0, X) && inBound(min_screen[1], max_screen[1], 0, Y)) {
 				for (int i = min_screen[0]; i <= max_screen[0]; i++) {
@@ -335,10 +332,6 @@ private:
 					int idx = i + j * (X + 1) + k * (Y + 1) * (X + 1);
 					clusterLookup[idx][0] = offset;
 					clusterLookup[idx][1] = clustersToAssign;
-					//clusterLookup[idx][2] = clustersToAssign;
-					//for (int i = clustersToAssign; i < MAX_LIGHTS_PER_CLUSTER-1; i++) {
-					//	clusterIdx[i][j][k].push_back(i);
-					//}
 					unrolledIdx.insert(unrolledIdx.end(), clusterIdx[i][j][k].begin(), clusterIdx[i][j][k].end());
 
 				}
@@ -807,11 +800,12 @@ private:
 		while (!glfwWindowShouldClose(window)) {
 			glfwPollEvents();
 
-			//updateClusterDataBuffer();
 			updateUniformBuffer();
-			//updateLightBuffer();
 			drawFrame();
-			//assignLights();
+
+#if CPU_CULL == 1
+			assignLights();
+#endif
 		}
 
 		vkDeviceWaitIdle(device);
