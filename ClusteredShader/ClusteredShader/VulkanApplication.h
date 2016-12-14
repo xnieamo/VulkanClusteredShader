@@ -335,6 +335,9 @@ private:
 					clusterLookup[idx][0] = offset;
 					clusterLookup[idx][1] = clustersToAssign;
 					//clusterLookup[idx][2] = clustersToAssign;
+					//for (int i = clustersToAssign; i < MAX_LIGHTS_PER_CLUSTER-1; i++) {
+					//	clusterIdx[i][j][k].push_back(i);
+					//}
 					unrolledIdx.insert(unrolledIdx.end(), clusterIdx[i][j][k].begin(), clusterIdx[i][j][k].end());
 
 				}
@@ -384,8 +387,9 @@ private:
 		int X = (int)(WIDTH / TILE_SIZE) + 1;
 		int Y = (int)(HEIGHT / TILE_SIZE) + 1;
 		int Z = 10;
-		clusterIndexSize = X * Y * Z * MAX_LIGHTS_PER_CLUSTER;
 		numberOfClusters = X * Y * Z;
+		clusterIndexSize = numberOfClusters * MAX_LIGHTS_PER_CLUSTER;
+
 
 		std::vector<int> clusterLookup;
 		clusterLookup.resize(clusterIndexSize, 0);
@@ -490,7 +494,7 @@ private:
 		offsetBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 		offsetBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-		std::array<VkDescriptorSetLayoutBinding, 3> bindings = { storageBufferABinding, computeUniformBinding, lookupBinding };// , lookupBinding, offsetBinding};
+		std::array<VkDescriptorSetLayoutBinding, 4> bindings = { storageBufferABinding, computeUniformBinding, lookupBinding, offsetBinding };// , lookupBinding, offsetBinding};
 		VkDescriptorSetLayoutCreateInfo layoutInfo = {};
 		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 		layoutInfo.bindingCount = bindings.size();
@@ -607,7 +611,7 @@ private:
 
 		descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		descriptorWrites[3].dstSet = lightDescriptorSet;
-		descriptorWrites[3].dstBinding = 2;
+		descriptorWrites[3].dstBinding = 3;
 		descriptorWrites[3].dstArrayElement = 0;
 		descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 		descriptorWrites[3].descriptorCount = 1;
@@ -660,7 +664,7 @@ private:
 		//vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
 		vkCmdBindPipeline(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipeline);
 		vkCmdBindDescriptorSets(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipelineLayout, 0, 1, &lightDescriptorSet, 0, 0);
-		vkCmdDispatch(lightCommandBuffer, (numLights + 16 - 1) / 16, 1, 1);
+		vkCmdDispatch(lightCommandBuffer, (WIDTH + TILE_SIZE - 1) / TILE_SIZE, (WIDTH + TILE_SIZE - 1) / TILE_SIZE, 1);
 
 		bufferBarrier.srcAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 		bufferBarrier.dstAccessMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
@@ -788,7 +792,7 @@ private:
 			updateUniformBuffer();
 			updateLightBuffer();
 			drawFrame();
-			assignLights();
+			//assignLights();
 		}
 
 		vkDeviceWaitIdle(device);

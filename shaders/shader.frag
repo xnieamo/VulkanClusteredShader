@@ -25,10 +25,10 @@ layout(std430, binding = 3) buffer LightsA
 	Light lights[];
 };
 
-layout(std430, binding = 4) buffer Clusters
+layout(std430, binding = 4) buffer LookupIndex
 {
-	uint lightIndexLookup[];
-};
+	int data[];
+} lookupIndexBuffer;
 
 layout(std430, binding = 5) buffer ClustersData
 {
@@ -104,38 +104,27 @@ void main() {
     ivec2 lightIdx = ivec2(lookupIndices[l_idx][0], lookupIndices[l_idx][1]);
     // Light light = lights[lightIndexLookup[0]];
    	// lookupIndices[l_idx][0] = l_idx;
+   	int test = lookupIndexBuffer.data[0];
    	
    	// Debug map
-   	if (lightIdx[1] == 0)
+   	if (false)
    		outColor = vec4(0.f, 0.f, 0.f, 1.f);
    	else 
 	{
 
-		uint start = lightIdx[0];
-		uint end =  lightIdx[0] + lightIdx[1];
-		uint count = 0;
-		// while (count < lightIdx[2]) {
-		// 	// vec4 pos = lights[lightIndexLookup[i]].pos;
-	 //  //   	vec4 col = lights[lightIndexLookup[i]].col;
-	 //  //   	vec3 lightDir = pos.xyz - fragPosition;
-	 //  //   	float distance = length(lightDir);
-	 //  //   	lightDir = lightDir / distance;
-
-	 //  //   	float attenuation = max(0.001f, pos.w - distance);
-
-	 //  //   	float specular = specularLighting(nor, lightDir, viewDir);
-	 //  //   	float diffuse  = clamp(dot(nor, lightDir), 0.001, 1.0);
-
-	 //  //   	color += texture(texSampler, fragTexCoord) * attenuation * vec4(normalize(col.rgb), 1.f) * (specular + diffuse); 
-		// 	count++;
-		// }
-		// lookupIndices[l_idx][1] = int(count + start);
+		// uint start = lightIdx[0];
+		// uint end =  lightIdx[0] + lightIdx[1];
+		// uint start = l_idx * 10;
+		// uint end = l_idx * 10 + 50;
+		uint start = 0;
+		uint end = 50;
 
 		for (uint i = start; i < end; i++) {
 	    	// Light light = lights[lightIndexLookup[i]];
-
-	    	vec4 pos = lights[lightIndexLookup[i]].pos;
-	    	vec4 col = lights[lightIndexLookup[i]].col;
+	    	// vec4 pos = lights[lightIndexLookup[i]].pos;
+	    	// vec4 col = lights[lightIndexLookup[i]].col;
+	    	vec4 pos = lights[i].pos;
+	    	vec4 col = lights[i].col;
 	    	vec3 lightDir = pos.xyz - fragPosition;
 	    	float distance = length(lightDir);
 	    	lightDir = lightDir / distance;
