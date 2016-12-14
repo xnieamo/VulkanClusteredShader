@@ -123,8 +123,13 @@ void main() {
 
 		for (uint i = start; i < end; i++) {
 	    	// Light light = lights[lightIndexLookup[i]];
-	    	vec4 pos = lights[lookupIndexBuffer.data[i]].pos;
-	    	vec4 col = lights[lookupIndexBuffer.data[i]].col;
+
+			int light_index = lookupIndexBuffer.data[i];
+			if (light_index < 0)
+				break;
+
+	    	vec4 pos = lights[light_index].pos;
+	    	vec4 col = lights[light_index].col;
 	    	// vec4 pos = lights[i].pos;
 	    	// vec4 col = lights[i].col;
 	    	vec3 lightDir = pos.xyz - fragPosition;
