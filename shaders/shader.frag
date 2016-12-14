@@ -107,6 +107,8 @@ void main() {
    	int test = lookupIndexBuffer.data[0];
    	
    	// Debug map
+   	// AFDSHFBAISDFHLKSDFHKLSDFHKLSFHKLDFHLKJDS LOOK HERE ALJF:LDSHF:LSDJFL:SDJGL:KDSJG:LSDGJL:KDFJ
+   	// DSFL:SDJFL:SDKFJKDS:FJ :LDSJKFL:JDSLFKJ FLIP BOOL LAK:JFD:LDSKJF:LDSKJF:LDSKFJ:LDSKJF:LDSJF:
    	if (false)
    		outColor = vec4(0.f, 0.f, 0.f, 1.f);
    	else 

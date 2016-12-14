@@ -38,7 +38,7 @@ layout(std430, binding = 2) buffer IndexLookup
 
 // Shared values between all the threads in the group
 shared uint visibleLightCount;
-vec4 frustumPlanes[6];
+vec4 frustumPlanes[4];
 // Shared local storage for visible indices, will be written out to the global buffer at the end
 shared int visibleLightIndices[100];
 shared mat4 viewProjection;
@@ -71,20 +71,20 @@ void createFrustumPlanes() {
 	frustumPlanes[3].z = viewProjection[3][2] + viewProjection[1][2];
 	frustumPlanes[3].w = viewProjection[3][3] + viewProjection[1][3];
 
-	// Far
-	frustumPlanes[4].x = viewProjection[3][0] + viewProjection[2][0] * 100.0;
-	frustumPlanes[4].y = viewProjection[3][1] + viewProjection[2][1] * 100.0;
-	frustumPlanes[4].z = viewProjection[3][2] + viewProjection[2][2] * 100.0;
-	frustumPlanes[4].w = viewProjection[3][3] + viewProjection[2][3] * 100.0;
+	// // Far
+	// frustumPlanes[4].x = viewProjection[3][0] + viewProjection[2][0] * 100.0;
+	// frustumPlanes[4].y = viewProjection[3][1] + viewProjection[2][1] * 100.0;
+	// frustumPlanes[4].z = viewProjection[3][2] + viewProjection[2][2] * 100.0;
+	// frustumPlanes[4].w = viewProjection[3][3] + viewProjection[2][3] * 100.0;
 
-	// Top
-	frustumPlanes[5].x = viewProjection[3][0] - viewProjection[2][0] * 0.1;
-	frustumPlanes[5].y = viewProjection[3][1] - viewProjection[2][1] * 0.1;
-	frustumPlanes[5].z = viewProjection[3][2] - viewProjection[2][2] * 0.1;
-	frustumPlanes[5].w = viewProjection[3][3] - viewProjection[2][3] * 0.1;
+	// // Top
+	// frustumPlanes[5].x = viewProjection[3][0] - viewProjection[2][0] * 0.1;
+	// frustumPlanes[5].y = viewProjection[3][1] - viewProjection[2][1] * 0.1;
+	// frustumPlanes[5].z = viewProjection[3][2] - viewProjection[2][2] * 0.1;
+	// frustumPlanes[5].w = viewProjection[3][3] - viewProjection[2][3] * 0.1;
 
-	for (int i = 0; i < 6; i++) {
-		frustumPlanes[5] /= length(frustumPlanes[5].xyz);
+	for (int i = 0; i < 4; i++) {
+		frustumPlanes[i] /= length(frustumPlanes[i].xyz);
 	}
 }
 
@@ -99,7 +99,7 @@ void main() {
 
 	ivec2 location = ivec2(gl_GlobalInvocationID.xy);
 	ivec2 itemID = ivec2(gl_LocalInvocationID.xy);
-	ivec2 tileID = ivec2(gl_WorkGroupID.x, itemID.x);
+	ivec2 tileID = ivec2(gl_WorkGroupID.xy);
 	ivec2 tileNumber = ivec2(gl_NumWorkGroups.xy);
 	uint index = tileID.y * tileNumber.x + tileID.x;
 
@@ -123,26 +123,87 @@ void main() {
 
 	barrier();
 
-	// indexLookupBuffer.data[location.x] = int(gl_NumWorkGroups.x * tileID.y + tileID.x);
-	// indexLookupBuffer.data[location.x] =  location.x * 50;
+	// Calculate the frustum coordinates in screen space
+	if (gl_LocalInvocationIndex == 0) {
+		vec2 screenFrustum[4];
+
+		screenFrustum[0] = vec2( tileID * TILE_SIZE );
+	    screenFrustum[1] = vec2( tileID.x + 1, tileID.y );
+	    screenFrustum[2] = vec2( tileID.x, tileID.y + 1 );
+	    screenFrustum[3] = vec2( tileID.x + 1, tileID.y + 1 );
+
+	    // Convert to view space
+	    vec3 viewFrustum[4];
+	    for (int i = 0; i < 4; i++) {
+	    	vec2 tex = screenFrustum[i] / vec2(ubo.width, ubo.height);
+	    	viewFrustum[i] = vec3(vec2(tex.x, 1.0f - tex.y) * 2.0f - 1.0f, 1.0f);
+	    }
+
+	    // Compute planes
+	    vec3 eye = vec3(0.0, 0.0, 0.0);
+	    for (int i = 0; i < 4; i++) {
+	    	vec3 v0 = viewFrustum[i] - eye;
+			vec3 v1 = viewFrustum[(i + 1) % 4] - eye;
+
+			frustumPlanes[i].xyz = normalize(cross(v0, v1));
+			frustumPlanes[i].w = dot(frustumPlanes[i].xyz, eye);
+	    }
+	}
+
+	barrier();
+
+	// Test lights against tiles
+	uint lightCount = ubo.number_lights;
+	uint threadCount = TILE_SIZE * TILE_SIZE;
+	uint passCount = (lightCount + threadCount - 1) / threadCount;
+	for (uint i = 0; i < passCount; i++) {
+		// Get the lightIndex to test for this thread / pass. If the index is >= light count, then this thread can stop testing lights
+		uint lightIndex = i * threadCount + (itemID.y * TILE_SIZE + itemID.x);
+		if (lightIndex >= lightCount) {
+			break;
+		}
+
+		vec4 position = lightBuffer.lights[lightIndex].pos;
+		position[3] = 1.0;
+		float radius = lightBuffer.lights[lightIndex].vel.w;
+
+		position = ubo.view * position;
+
+		// We check if the light exists in our frustum
+		bool inFrustum = true;
+		for (uint j = 0; j < 4; j++) {
+			float testTerm = dot(position.xyz, frustumPlanes[j].xyz) + radius - frustumPlanes[j].w;
+
+			// If one of the tests fails, then there is no intersection
+			if (testTerm <= 0.0) {
+				inFrustum = false;
+				break;
+			}
+		}
+
+		// If greater than zero, then it is a visible light
+		if (inFrustum) {
+			// Add index to the shared array of visible indices
+			uint offset = atomicAdd(visibleLightCount, 1);
+			visibleLightIndices[offset] = int(lightIndex);
+		}
+	}
+
+	// uint l_offset = atomicAdd(visibleLightCount, 1);
+	// visibleLightIndices[l_offset] = int(l_offset);
+	
+	barrier();
+
 
 
 	// // One thread should fill the global light buffer
-	// if (gl_LocalInvocationIndex == 0) {
-	// // if (l_index < LIGHT_NUM) {
+	// if (itemID.x == 0 && itemID.y ==0) {
+		// indexLookupBuffer.data[itemID.x] = itemID.x;
+	uint offset = index * 50; // Determine bosition in global buffer
+	for (uint i = 0; i < min(visibleLightCount, ubo.max_lights_per_cluster) ; i++) {
+		indexLookupBuffer.data[i + offset] = visibleLightIndices[i];
+	}
 
-		uint offset = l_index * 50; // Determine bosition in global buffer
-		// for (uint i = 0; i < visibleLightCount ; i++) {
-		for (uint i = 0; i < 50 ; i++) {
-			indexLookupBuffer.data[i + offset] = int(i);//visibleLightIndices[i];
-		}
-
-	// 	// if (visibleLightCount != 50) {
-	// 	// 	// Unless we have totally filled the entire array, mark it's end with -1
-	// 	// 	// Final shader step will use this to determine where to stop (without having to pass the light count)
-	// 	// 	indexLookupBuffer.data[offset + visibleLightCount] = -1;
-	// 	// }
-	// }
 
 	// indexLookupBuffer.data[location.x] = int(location.x);
 
