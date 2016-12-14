@@ -78,7 +78,7 @@ namespace SceneStructs {
 	};
 
 	// Lights
-	const int numLights = 100;
+	const int numLights = 200;
 	struct uboLights {
 		// Using the fourth entry in lightPos as the radius
 		glm::vec4 lightPos[numLights];

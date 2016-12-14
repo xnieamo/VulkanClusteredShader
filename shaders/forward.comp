@@ -96,11 +96,8 @@ void createFrustumPlanes() {
 	}
 }
 
-// Took some light culling guidance from Dice's deferred renderer
-// http://www.dice.se/news/directx-11-rendering-battlefield-3/
-
 #define TILE_SIZE 32
-#define THREAD_COUNT 1
+#define THREAD_COUNT 6
 layout(local_size_x = THREAD_COUNT, local_size_y = THREAD_COUNT) in;
 void main() {
 
@@ -124,7 +121,7 @@ void main() {
 	}
 
 	int l_index = location.x;
-	if (l_index < LIGHT_NUM) {
+	if (l_index < ubo.number_lights) {
 		// Update velocity
 		vec4 pos = lightBuffer.lights[l_index].pos;
 		vec4 vel = lightBuffer.lights[l_index].vel;
@@ -136,114 +133,6 @@ void main() {
 	}
 
 	barrier();
-
-	// if (gl_LocalInvocationIndex == 0) {
-
-	// 	const vec2 ndc_upper_left = vec2(-1.0, -1.0);
-	// 	const float ndc_near_plane = 0.0;
-	// 	const float ndc_far_plane = 1.0;
-
-
-	// 	vec2 ndc_size_per_tile = 2.0 * vec2(TILE_SIZE, TILE_SIZE) / vec2(ubo.width, ubo.height);
-
-	// 	vec2 ndc_pts[4];
-	// 	ndc_pts[0] = ndc_upper_left + tileID * ndc_size_per_tile;  // upper left
-	// 	ndc_pts[1] = vec2(ndc_pts[0].x + ndc_size_per_tile.x, ndc_pts[0].y); // upper right
-	// 	ndc_pts[2] = ndc_pts[0] + ndc_size_per_tile;
-	// 	ndc_pts[3] = vec2(ndc_pts[0].x, ndc_pts[0].y + ndc_size_per_tile.y); // lower left
-
-	// 	vec3 points[8];
-
-	// 	vec4 temp;
-	// 	for (int i = 0; i < 4; i++)
-	// 	{
-	// 		temp = inv_projView * vec4(ndc_pts[i], min_depth, 1.0);
-	// 		points[i] = temp.xyz / temp.w;
-	// 		temp = inv_projView * vec4(ndc_pts[i], max_depth, 1.0);
-	// 		points[i + 4] = temp.xyz / temp.w;
-	// 	}
-
-	// 	vec3 temp_normal;
-	// 	for (int i = 0; i < 4; i++)
-	// 	{
-	// 		//Cax+Cby+Ccz+Cd = 0, planes[i] = (Ca, Cb, Cc, Cd)
-	// 		// temp_normal: normal without normalization
-	// 		temp_normal = cross(points[i] - ubo.pos.xyz, points[i + 1] - ubo.pos.xyz); 
-	// 		temp_normal = normalize(temp_normal);
-	// 		frustumPlanes[i] = vec4(temp_normal, - dot(temp_normal, points[i]));
-	// 	}
-	// 	// near plane
-	// 	{
-	// 		temp_normal = cross(points[1] - points[0], points[3] - points[0]); 
-	// 		temp_normal = normalize(temp_normal);
-	// 		frustumPlanes[4] = vec4(temp_normal, - dot(temp_normal, points[0]));
-	// 	}
-	// 	// far plane
-	// 	{
-	// 		temp_normal = cross(points[7] - points[4], points[5] - points[4]); 
-	// 		temp_normal = normalize(temp_normal);
-	// 		frustumPlanes[5] = vec4(temp_normal, - dot(temp_normal, points[4]));
-	// 	}
-	// }
-
-
-	// {
-	// 	float nearDist = 0.01;
-	// 	float farDist = 100.0;
-
-	// 	float Hnear = 2 * tan(radians(45.0) / 2.0) * nearDist;
-	// 	float Wnear = Hnear * (ubo.width / ubo.height);
-
-	// 	float Hfar = 2 * tan(radians(45.0) / 2.0) * farDist;
-	// 	float Wfar = Hfar * (ubo.width / ubo.height);
-
-	// 	vec3 up = normalize(ubo.up.xyz);
-	// 	vec3 dir = normalize(ubo.dir.xyz);
-	// 	vec3 right = cross(up, dir);
-
-	// 	vec3 fc = ubo.pos + dir * farDist;
-
-	// 	vec3 ftl = fc + (up * Hfar/2) - (right * Wfar/2);
-	// 	vec3 ftr = fc + (up * Hfar/2) + (right * Wfar/2)
-	// 	vec3 fbl = fc - (up * Hfar/2) - (right * Wfar/2)
-	// 	vec3 fbr = fc - (up * Hfar/2) + (right * Wfar/2)
-
-	// 	vec3 nc = ubo.pos + dir * nearDist 
-
-	// 	vec3 ntl = nc + (up * Hnear/2) - (right * Wnear/2)
-	// 	vec3 ntr = nc + (up * Hnear/2) + (right * Wnear/2)
-	// 	vec3 nbl = nc - (up * Hnear/2) - (right * Wnear/2)
-	// 	vec3 nbr = nc - (up * Hnear/2) + (right * Wnear/2)
-	// }
-
-
-	// // Calculate the frustum coordinates in screen space
-	// if (gl_LocalInvocationIndex == 0) {
-	// 	vec2 screenFrustum[4];
-
-	// 	screenFrustum[0] = vec2( tileID * TILE_SIZE );
-	//     screenFrustum[1] = vec2( tileID.x + 1, tileID.y );
-	//     screenFrustum[2] = vec2( tileID.x, tileID.y + 1 );
-	//     screenFrustum[3] = vec2( tileID.x + 1, tileID.y + 1 );
-
-	//     // Convert to view space
-	//     vec3 viewFrustum[4];
-	//     for (int i = 0; i < 4; i++) {
-	//     	vec2 tex = screenFrustum[i] / vec2(ubo.width, ubo.height);
-	    	
-
-	//     	vec4 view = inverseProj * vec4(vec2(tex.x, 1.0f - tex.y) * 2.0f - 1.0f, 1.0f, 1.0f);
-	//     	view /= view.w;
-	//     	viewFrustum[i] = view.xyz;
-	//     }
-
-	//     // Compute planes
-	//     vec3 eye = vec3(0.0, 0.0, 0.0);
-	//     for (int i = 0; i < 4; i++) {
-	// 		frustumPlanes[i].xyz = -normalize(cross(viewFrustum[i], viewFrustum[(i + 1) % 4]));
-	// 		frustumPlanes[i].w = 0.0;//dot(frustumPlanes[i].xyz, eye);
-	//     }
-	// }
 
 	// Calculate the frustum coordinates in screen space
 	if (gl_LocalInvocationIndex == 0) {
@@ -282,15 +171,17 @@ void main() {
 	uint lightCount = ubo.number_lights;
 	uint threadCount = THREAD_COUNT * THREAD_COUNT;
 	uint passCount = (lightCount + threadCount - 1) / threadCount;
+	// uint lightCounter = 0;
 	for (uint i = 0; i < passCount; i++) {
 		// Get the lightIndex to test for this thread / pass. If the index is >= light count, then this thread can stop testing lights
 		uint lightIndex = i * threadCount + (itemID.y * THREAD_COUNT + itemID.x);
+		// uint lightIndex = atomicAdd(lightCounter, 1);
 		if (lightIndex >= lightCount) {
 			break;
 		}
 
 		vec4 position = lightBuffer.lights[lightIndex].pos;
-		float radius = lightBuffer.lights[lightIndex].vel.w;
+		float radius = lightBuffer.lights[lightIndex].vel.w * 1.5;
 		
 
 		position = ubo.proj * ubo.view * ubo.model * vec4(position.xyz, 1.0);
@@ -300,7 +191,7 @@ void main() {
 
 		// We check if the light exists in our frustum
 		bool inFrustum = true;
-		for (uint j = 0; j < 1; j++) {
+		for (uint j = 0; j < 4; j++) {
 			if (dot(position.xyz, frustumPlanes[j].xyz) + frustumPlanes[i].w < - radius) {
 				inFrustum = false;
 				break;
@@ -311,7 +202,7 @@ void main() {
 		}
 
 		// If greater than zero, then it is a visible light
-		if (inFrustum) {
+		if (inFrustum && depth >= 0.01) {
 			// Add index to the shared array of visible indices
 			uint offset = atomicAdd(visibleLightCount, 1);
 			visibleLightIndices[offset] = int(lightIndex);

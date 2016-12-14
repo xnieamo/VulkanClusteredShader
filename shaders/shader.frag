@@ -38,7 +38,7 @@ layout(std430, binding = 5) buffer ClustersData
 
 layout(origin_upper_left) in vec4 gl_FragCoord;
 
-int numLights = 100;
+int numLights = 200;
 const float Z_explicit[10] = {0.05f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f};
 
 #define WIDTH 1200
@@ -103,7 +103,7 @@ void main() {
    	// Debug map
    	// AFDSHFBAISDFHLKSDFHKLSDFHKLSFHKLDFHLKJDS LOOK HERE ALJF:LDSHF:LSDJFL:SDJGL:KDSJG:LSDGJL:KDFJ
    	// DSFL:SDJFL:SDKFJKDS:FJ :LDSJKFL:JDSLFKJ FLIP BOOL LAK:JFD:LDSKJF:LDSKJF:LDSKFJ:LDSKJF:LDSJF:
-   	if (false)
+   	if (true)
    		outColor = vec4(0.f, 0.f, 0.f, 1.f);
    	else 
 	{

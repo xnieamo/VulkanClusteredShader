@@ -437,7 +437,7 @@ private:
 		lights.resize(numLights);
 		for (int i = 0; i < numLights; i++) {
 			glm::vec3 pos;
-			pos.x = (u01(rng) - 0.5f) * 10.f;
+			pos.x = (u01(rng) - 0.5f) * 40.f;
 			pos.y = (u01(rng)) * 10.f;
 			pos.z = (u01(rng) - 0.5f) * 10.f;
 
