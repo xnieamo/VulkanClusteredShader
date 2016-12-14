@@ -82,7 +82,7 @@ int findZ (float z) {
 }
 
 
-#define TILE_SIZE 16
+#define TILE_SIZE 32
 #define THREAD_COUNT 4
 layout(local_size_x = THREAD_COUNT, local_size_y = THREAD_COUNT) in;
 void main() {
@@ -125,10 +125,10 @@ void main() {
 	if (gl_LocalInvocationIndex == 0) {
 		vec2 screenFrustum[4];
 
-		screenFrustum[0] = vec2( tileID * TILE_SIZE );
-	    screenFrustum[1] = vec2( tileID.x + 1.0, tileID.y );
-	    screenFrustum[2] = vec2( tileID.x, tileID.y + 1.0 );
-	    screenFrustum[3] = vec2( tileID.x + 1.0, tileID.y + 1.0 );
+		screenFrustum[0] = vec2( tileID * 1 ) * TILE_SIZE;
+	    screenFrustum[1] = vec2( tileID.x + 1, tileID.y ) * TILE_SIZE;
+	    screenFrustum[2] = vec2( tileID.x, tileID.y + 1 ) * TILE_SIZE;
+	    screenFrustum[3] = vec2( tileID.x + 1, tileID.y + 1 ) * TILE_SIZE;
 
 	    // Convert to view space
 	    vec3 viewFrustum[4];

@@ -43,7 +43,7 @@ const float Z_explicit[10] = {0.05f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f,
 
 #define WIDTH 1200
 #define HEIGHT 1000
-#define TILE_SIZE 64
+#define TILE_SIZE 32
 
 vec3 applyNormalMap(vec3 geomnor, vec3 normap) {
     normap = normap * 2.0 - 1.0;
@@ -162,7 +162,7 @@ void main() {
 	// // Actual output color
  //    outColor = clamp(1.f * color, 0.001, 1.0);
 
-	// Cluster of lights view
+	// // Cluster of lights view
 	// uint start = l_idx * 50;
 	// uint end = l_idx * 50 + 50;
 	// uint lightCC = 0;
@@ -174,8 +174,8 @@ void main() {
  //    }
 	// outColor = vec4(vec3(float(lightCC) / 50.0), 1.0);
 
-    // Cluster debug
-    // int zz = Sx + Sy * X + Sz * X * Y;
+ //    // Cluster debug
+ //    int zz = Sx + Sy * X + Sz * X * Y;
 	// outColor = vec4((vec3(1.f) * (zz % 10))/ 10.0, 1.f);
 
 	// Cluster debug pretty

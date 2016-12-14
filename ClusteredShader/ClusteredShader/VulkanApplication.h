@@ -37,7 +37,7 @@
 
 #define WIDTH 1200
 #define HEIGHT 1000
-#define TILE_SIZE 64
+#define TILE_SIZE 32
 #define MAX_LIGHTS_PER_CLUSTER 50
 #define CPU_CULL 0
 
@@ -648,8 +648,8 @@ private:
 		bufferBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
 		bufferBarrier.buffer = lightStorageA;
 		bufferBarrier.size = sizeof(Light) * numLights;
-		bufferBarrier.srcAccessMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-		bufferBarrier.dstAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+		bufferBarrier.srcAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+		bufferBarrier.dstAccessMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 		bufferBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
 		bufferBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
 		bufferBarrier.dstQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
@@ -659,8 +659,8 @@ private:
 		lightBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
 		lightBarrier.buffer = clusterIndexBuffer;
 		lightBarrier.size = sizeof(int) * clusterIndexSize;
-		lightBarrier.srcAccessMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-		lightBarrier.dstAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+		lightBarrier.srcAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+		lightBarrier.dstAccessMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 		lightBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
 		lightBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
 		lightBarrier.dstQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
@@ -668,7 +668,7 @@ private:
 
 		std::array<VkBufferMemoryBarrier, 2> barriers = { bufferBarrier, lightBarrier };
 
-		vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 2, barriers.data(), 0, nullptr);
+		vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 2, barriers.data(), 0, nullptr);
 		vkCmdBindPipeline(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipeline);
 		vkCmdBindDescriptorSets(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipelineLayout, 0, 1, &lightDescriptorSet, 0, 0);
 		vkCmdDispatch(lightCommandBuffer, (WIDTH + TILE_SIZE - 1) / TILE_SIZE, (WIDTH + TILE_SIZE - 1) / TILE_SIZE, 1);
@@ -676,15 +676,15 @@ private:
 		//vkCmdDispatch(lightCommandBuffer, 1, 1, 1);
 
 		for (int i = 0; i < 2; i++) {
-			barriers[i].srcAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-			barriers[i].dstAccessMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-			barriers[i].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-			barriers[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+			barriers[i].srcAccessMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+			barriers[i].dstAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+			barriers[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+			barriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 			barriers[i].dstQueueFamilyIndex = queueFamilyIndices.computeFamily;
 			barriers[i].srcQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
 		}
 
-		vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 2, barriers.data(), 0, nullptr);
+		vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 2, barriers.data(), 0, nullptr);
 
 		if (vkEndCommandBuffer(lightCommandBuffer) != VK_SUCCESS) {
 			throw std::runtime_error("failed to record command buffer!");
