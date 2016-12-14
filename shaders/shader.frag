@@ -10,7 +10,7 @@ layout(location = 4) in vec3 camPos;
 layout(location = 0) out vec4 outColor;
 
 layout(binding = 1) uniform sampler2D texSampler;
-layout(binding = 3) uniform sampler2D norSampler;
+layout(binding = 2) uniform sampler2D norSampler;
 
 
 struct Light 
@@ -20,7 +20,7 @@ struct Light
 	vec4 vel;
 };
 
-layout(std430, binding = 2) buffer LightsA
+layout(std430, binding = 3) buffer LightsA
 {
 	Light lights[];
 };
@@ -36,7 +36,7 @@ layout(std430, binding = 5) buffer ClustersData
 	int lookupIndices[][2];
 };
 
-// layout(origin_upper_left) in vec4 gl_FragCoord;
+layout(origin_upper_left) in vec4 gl_FragCoord;
 
 int numLights = 100;
 const float Z_explicit[10] = {0.05f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f};
@@ -99,7 +99,7 @@ void main() {
     // Find Z cluster index
     int Sz = findZ(z_e);
 
-    int l_idx = Sx + Sy * X;// + Sz * X * Y;
+    int l_idx = Sx + Sy * X + Sz * X * Y;
     // ivec3 lightIdx = lookupIndices[l_idx];
     ivec2 lightIdx = ivec2(lookupIndices[l_idx][0], lookupIndices[l_idx][1]);
     // Light light = lights[lightIndexLookup[0]];
@@ -110,7 +110,6 @@ void main() {
    		outColor = vec4(0.f, 0.f, 0.f, 1.f);
    	else 
 	{
-		// outColor = vec4(1.f);
 
 		uint start = lightIdx[0];
 		uint end =  lightIdx[0] + lightIdx[1];
@@ -148,16 +147,16 @@ void main() {
 
 	    	color += texture(texSampler, fragTexCoord) * attenuation * vec4(normalize(col.rgb), 1.f) * (specular + diffuse); 
 	    }
-    	// outColor = clamp(1.f * color, 0.001, 1.0);
+    	outColor = clamp(1.f * color, 0.001, 1.0);
 
 	}
 
 
  //    // Real 
- //    for (int i = 0; i < 10; i++) {
+ //    for (int i = 0; i < numLights; i++) {
 
- //    	vec4 pos = lights[lightIndexLookup[i]].pos;
- //    	vec4 col = lights[lightIndexLookup[i]].col;
+ //    	vec4 pos = lights[i].pos;
+ //    	vec4 col = lights[i].col;
  //    	vec3 lightDir = pos.xyz - fragPosition;
  //    	float distance = length(lightDir);
  //    	lightDir = lightDir / distance;
@@ -179,7 +178,7 @@ void main() {
 	// outColor = vec4((vec3(1.f) * (zz % 10))/ 10.0, 1.f);
 
 	// Cluster debug pretty
-    outColor = vec4(normalize(vec3(Sx + 1, Sy + 1, Sz)), 1.f);
+    // outColor = vec4(normalize(vec3(Sx + 1, Sy + 1, Sz)), 1.f);
 
     // Depth Debug
     // outColor = vec4(vec3(1.f,1.f,1.f) * z_e / 100.f, 1.f);

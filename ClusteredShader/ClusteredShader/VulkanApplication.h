@@ -38,7 +38,7 @@
 #define WIDTH 1200
 #define HEIGHT 1000
 #define TILE_SIZE 32
-#define MAX_LIGHTS_PER_CLUSTER 10
+#define MAX_LIGHTS_PER_CLUSTER 50
 
 const std::string MODEL_PATH = "../../res/models/sponza.obj";
 const std::string TEXTURE_PATH = "../../res/textures/kamen.jpg";
@@ -65,7 +65,7 @@ glm::vec2 rotate;
 float scale = 1.f;
 glm::vec3 F, R, U, P;
 
-const float Z_explicit[10] = { 0.1f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f };
+const float Z_explicit[10] = { 0.05f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f };
 
 class VulkanApplication {
 public:
@@ -206,7 +206,7 @@ private:
 	}
 
 	bool inBound(int minVal, int maxVal, int minBound, int maxBound) {
-		return (minVal >= minBound && minVal <= maxBound && maxVal >= minBound && maxVal <= maxBound);
+		return (minVal >= minBound && minVal <= maxBound) || (maxVal >= minBound && maxVal <= maxBound);
 	}
 
 	void assignLights() {
@@ -218,81 +218,105 @@ private:
 		
 		//std::cout << "All Good so far!" << std::endl;
 		int numel = 0;
-		for (int index = 0; index < 10; index++) {
+		for (int index = 0; index < numLights; index++) {
 			Light l = lights[index];
 			glm::vec4 pos = l.pos;
 			pos[3] = 1.f;
-			float dist = l.vel[3];
+			float dist = l.vel[3]*2;
 
-			// Bind light in AABB
-			glm::vec4 max = pos + glm::vec4(glm::vec3(dist), 0.f);
-			glm::vec4 min = pos - glm::vec4(glm::vec3(dist), 0.f);
+			// Get all the corners of the light's world space AABB
+			std::vector<glm::vec4> aabb = {
+				glm::vec4(pos + glm::vec4(dist, dist, dist, 0.f)),
+				glm::vec4(pos + glm::vec4(dist, dist, -dist, 0.f)),
+				glm::vec4(pos + glm::vec4(dist, -dist, dist, 0.f)),
+				glm::vec4(pos + glm::vec4(dist, -dist, -dist, 0.f)),
+				glm::vec4(pos + glm::vec4(-dist, dist, dist, 0.f)),
+				glm::vec4(pos + glm::vec4(-dist, dist, -dist, 0.f)),
+				glm::vec4(pos + glm::vec4(-dist, -dist, dist, 0.f)),
+				glm::vec4(pos + glm::vec4(-dist, -dist, -dist, 0.f))
+			};
 
-			// 1. Convert AABB to view space
-			max = cubo.proj * cubo.view * cubo.model * max;
-			min = cubo.proj * cubo.view * cubo.model * min;
-			max = max / max.w;
-			min = min / min.w;
+			// Loop over each corner to find the min/max screen space values for
+			// X and Y. Also find min/max for Z in view space
+			glm::ivec3 min_screen(INT_MAX), max_screen(INT_MIN);
+			for (int i = 0; i < 8; i++) {
+				glm::vec4 pos = aabb[i];
 
-			// 2. Convert to screen space 
-			// Max coordinates
-			int maxx = std::min(std::max(int(glm::round((max.x + 1) / 2.f * WIDTH)) / TILE_SIZE, -1), X + 1);
-			int maxy = std::min(std::max(int(glm::round((1 - max.y) / 2.f * HEIGHT)) / TILE_SIZE, -1), Y + 1);
-			int maxz = max.w > 0.f ? findZ(max.z) : -1;
+				// Project into view space
+				pos = cubo.proj * cubo.view * cubo.model * pos;
+				float z = pos[2];
+				pos = pos / pos.w;
 
-			// Min coordinates
-			int minx = std::min(std::max(int(glm::round((min.x + 1) / 2.f * WIDTH)) / TILE_SIZE, -1), X + 1);
-			int miny = std::min(std::max(int(glm::round((1 - min.y) / 2.f * HEIGHT)) / TILE_SIZE, -1), Y + 1);
-			int minz = min.w > 0.f ? findZ(min.z) : -1;
+				// Calculate screen space coords for X and Y
+				int Sx = glm::clamp(int(glm::round((pos.x + 1) / 2.f * WIDTH)) / TILE_SIZE, -1, X + 1);
+				int Sy = glm::clamp(int(glm::round((1 - pos.y) / 2.f * HEIGHT)) / TILE_SIZE, -1, Y + 1);
 
-			// Swap max and min if they do not hold actual values
-			if (minx > maxx) { std::swap(minx, maxx); }
-			if (miny > maxy) { std::swap(miny, maxy); }
-			if (minz > maxz) { std::swap(minz, maxz); }
-			
-			// Update clamping condition if min > minBound || max < maxBound
-			if (minx >= 0 || maxx <= X) {
-				minx = std::min(std::max(minx, 0), X);
-				maxx = std::min(std::max(maxx, 0), X);
+				// Update min and max
+				if (Sx < min_screen[0]) { min_screen[0] = Sx; }
+				if (Sx > max_screen[0]) { max_screen[0] = Sx; }
+				if (Sy < min_screen[1]) { min_screen[1] = Sy; }
+				if (Sy > max_screen[1]) { max_screen[1] = Sy; }
+
+				// Find Z plane and update min/max
+				int Sz = findZ(z);
+				if (Sz < min_screen[2]) { min_screen[2] = Sz; }
+				if (Sz > max_screen[2]) { max_screen[2] = Sz; }
 			}
 
-			if (miny >= 0 || maxy <= Y) {
-				miny = std::min(std::max(miny, 0), Y);
-				maxy = std::min(std::max(maxy, 0), Y);
+			// Clamp final min/max values if part of or the entire AABB
+			// intersects with the clusters
+			if (!(min_screen[0] < 0 && max_screen[0] < 0) && !(min_screen[0] > X && max_screen[0] > X)) {
+				min_screen[0] = glm::clamp(min_screen[0], 0, X);
+				max_screen[0] = glm::clamp(max_screen[0], 0, X);
 			}
 
-			if (minz >= 0 || maxz <= Z) {
-				minz = std::min(std::max(minz, 0), Z);
-				maxz = std::min(std::max(maxz, 0), Z);
+			if (!(min_screen[1] < 0 && max_screen[1] < 0) && !(min_screen[1] > Y && max_screen[1] > Y)) {
+				min_screen[1] = glm::clamp(min_screen[1], 0, Y);
+				max_screen[1] = glm::clamp(max_screen[1], 0, Y);
 			}
 
-			// Dummy test, fill all lights into z=0 buffer
-			for (int i = 0; i <= X; i++) {
-				for (int j = 0; j <= Y; j++) {
-					//for (int k = minz; k <= maxz; k++) {
-					int k = 0;
-					if (i >= 0 && j >= 0 && k >= 0) {
-						numel++;
-						clusterIdx[i][j][k].push_back(index);
+			if (!(min_screen[2] < 0 && max_screen[2] < 0) && !(min_screen[2] > Z && max_screen[2] > Z)) {
+				min_screen[2] = glm::clamp(min_screen[2], 0, Z);
+				max_screen[2] = glm::clamp(max_screen[2], 0, Z);
+			}
+
+			//std::cout << "Min: " << min_screen[0] << " " << min_screen[1] << " " << min_screen[2] << std::endl;
+			//std::cout << "Max: " << max_screen[0] << " " << max_screen[1] << " " << max_screen[2] << std::endl;
+
+			//min_screen[0] = 0;
+			//max_screen[0] = X;
+			//min_screen[1] = 0;
+			//max_screen[1] = Y;
+			// Loop over indices and add light to buffer
+			if (inBound(min_screen[0], max_screen[0], 0, X) && inBound(min_screen[1], max_screen[1], 0, Y)) {
+				for (int i = min_screen[0]; i <= max_screen[0]; i++) {
+					for (int j = min_screen[1]; j <= max_screen[1]; j++) {
+						for (int k = min_screen[2]; k <= max_screen[2]; k++) {
+						//int k = 0;
+							if (i >= 0 && j >= 0 && k >= 0) {
+								numel++;
+								if (clusterIdx[i][j][k].size() < MAX_LIGHTS_PER_CLUSTER)
+									clusterIdx[i][j][k].push_back(index);
+							}
+						}
 					}
-					//}
 				}
 			}
-			
-			//// 3. Fill index buffer by traversing AABB only if everything is inbounds though
-			//if (inBound(minx, maxx, 0, X) && inBound(miny, maxy, 0, Y)) {
-			//	for (int i = minx; i <= maxx; i++) {
-			//		for (int j = miny; j <= maxy; j++) {
-			//			for (int k = minz; k <= maxz; k++) {
-			//				//int k = 0;
-			//				if (i >= 0 && j >= 0 && k >= 0) {
-			//					numel++;
-			//					clusterIdx[i][j][k].push_back(index);
-			//				}
-			//			}
+
+			//// Dummy test, fill all lights into z=0 buffer
+			//for (int i = 0; i <= X; i++) {
+			//	for (int j = 0; j <= Y; j++) {
+			//		//for (int k = minz; k <= maxz; k++) {
+			//		int k = 0;
+			//		if (i >= 0 && j >= 0 && k >= 0) {
+			//			numel++;
+			//			if (clusterIdx[i][j][k].size() < MAX_LIGHTS_PER_CLUSTER)
+			//				clusterIdx[i][j][k].push_back(index);
 			//		}
+			//		//}
 			//	}
 			//}
+			
 		}
 
 
@@ -300,8 +324,8 @@ private:
 		std::vector<glm::ivec2> clusterLookup(numClusters);
 		std::vector<int> unrolledIdx;
 
-		//for (int k = 0; k < Z; k++) {
-			int k = 0;
+		for (int k = 0; k < Z; k++) {
+			//int k = 0;
 			for (int j = 0; j <= Y; j++) {
 				for (int i = 0; i <= X; i++) {
 
@@ -315,8 +339,8 @@ private:
 
 				}
 			}
-		//}
-		unrolledIdx.resize(clusterIndexSize);
+		}
+		//unrolledIdx.resize(clusterIndexSize);
 		//std::cout << "Finished Lights!" << std::endl;
 		//std::cout << numel << std::endl;
 
@@ -418,11 +442,11 @@ private:
 			col.b = u01(rng);
 			col.a = 1.f;
 
-			float radius = u01(rng) * 20.f + 1.f;
+			float radius = u01(rng) * 10.f + 1.f;
 			float dist = glm::sqrt(radius * radius / 3.f);
 			lights[i].pos = glm::vec4(pos, radius);
 			lights[i].col = col;
-			lights[i].vel = { 0.05f, 30.f, 0.0f, dist };
+			lights[i].vel = { 0.05f, 20.f, 0.0f, dist };
 		}
 
 		VkDeviceSize bufferSize = lights.size() * sizeof(Light);
@@ -442,19 +466,31 @@ private:
 	}
 
 	void createLightDescriptorSetLayout() {
-		VkDescriptorSetLayoutBinding storageBufferABinding = {};
-		storageBufferABinding.binding = 0;
-		storageBufferABinding.descriptorCount = 1;
-		storageBufferABinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-		storageBufferABinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
 		VkDescriptorSetLayoutBinding computeUniformBinding = {};
-		computeUniformBinding.binding = 3;
+		computeUniformBinding.binding = 0;
 		computeUniformBinding.descriptorCount = 1;
 		computeUniformBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 		computeUniformBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-		std::array<VkDescriptorSetLayoutBinding, 2> bindings = { storageBufferABinding, computeUniformBinding };
+		VkDescriptorSetLayoutBinding storageBufferABinding = {};
+		storageBufferABinding.binding = 1;
+		storageBufferABinding.descriptorCount = 1;
+		storageBufferABinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		storageBufferABinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+		VkDescriptorSetLayoutBinding lookupBinding = {};
+		lookupBinding.binding = 2;
+		lookupBinding.descriptorCount = 1;
+		lookupBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		lookupBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+		VkDescriptorSetLayoutBinding offsetBinding = {};
+		offsetBinding.binding = 3;
+		offsetBinding.descriptorCount = 1;
+		offsetBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		offsetBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+		std::array<VkDescriptorSetLayoutBinding, 3> bindings = { storageBufferABinding, computeUniformBinding, lookupBinding };// , lookupBinding, offsetBinding};
 		VkDescriptorSetLayoutCreateInfo layoutInfo = {};
 		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 		layoutInfo.bindingCount = bindings.size();
@@ -512,6 +548,7 @@ private:
 
 	void createLightDescriptorSet(){
 		VkDescriptorSetLayout layouts[] = { lightDescriptorSetLayout };
+
 		VkDescriptorSetAllocateInfo allocInfo = {};
 		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
 		allocInfo.descriptorPool = descriptorPool;
@@ -532,23 +569,49 @@ private:
 		computeUniform.offset = 0;
 		computeUniform.range = sizeof(ComputeUBO); 
 
-		std::array<VkWriteDescriptorSet, 2> descriptorWrites = {};
+		VkDescriptorBufferInfo clusterLookup = {};
+		clusterLookup.buffer = clusterIndexBuffer;
+		clusterLookup.offset = 0;
+		clusterLookup.range = sizeof(int) * clusterIndexSize;
+
+		VkDescriptorBufferInfo clusterData = {};
+		clusterData.buffer = clusterDataBuffer;
+		clusterData.offset = 0;
+		clusterData.range = sizeof(glm::ivec2) * numberOfClusters;
+
+		std::array<VkWriteDescriptorSet, 4> descriptorWrites = {};
 
 		descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		descriptorWrites[0].dstSet = lightDescriptorSet;
 		descriptorWrites[0].dstBinding = 0;
 		descriptorWrites[0].dstArrayElement = 0;
-		descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 		descriptorWrites[0].descriptorCount = 1;
-		descriptorWrites[0].pBufferInfo = &bufferA;
+		descriptorWrites[0].pBufferInfo = &computeUniform;
 
 		descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		descriptorWrites[1].dstSet = lightDescriptorSet;
-		descriptorWrites[1].dstBinding = 3;
+		descriptorWrites[1].dstBinding = 1;
 		descriptorWrites[1].dstArrayElement = 0;
-		descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 		descriptorWrites[1].descriptorCount = 1;
-		descriptorWrites[1].pBufferInfo = &computeUniform;
+		descriptorWrites[1].pBufferInfo = &bufferA;
+
+		descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrites[2].dstSet = lightDescriptorSet;
+		descriptorWrites[2].dstBinding = 2;
+		descriptorWrites[2].dstArrayElement = 0;
+		descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		descriptorWrites[2].descriptorCount = 1;
+		descriptorWrites[2].pBufferInfo = &clusterLookup;
+
+		descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrites[3].dstSet = lightDescriptorSet;
+		descriptorWrites[3].dstBinding = 2;
+		descriptorWrites[3].dstArrayElement = 0;
+		descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		descriptorWrites[3].descriptorCount = 1;
+		descriptorWrites[3].pBufferInfo = &clusterData;
 
 		vkUpdateDescriptorSets(device, descriptorWrites.size(), descriptorWrites.data(), 0, nullptr);
 	}
@@ -591,21 +654,21 @@ private:
 		bufferBarrier.dstAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 		bufferBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
 		bufferBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-		bufferBarrier.dstQueueFamilyIndex = queueFamilyIndices.computeFamily;
+		bufferBarrier.dstQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
 		bufferBarrier.srcQueueFamilyIndex = queueFamilyIndices.computeFamily;
 
-		vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
+		//vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
 		vkCmdBindPipeline(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipeline);
 		vkCmdBindDescriptorSets(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipelineLayout, 0, 1, &lightDescriptorSet, 0, 0);
-		vkCmdDispatch(lightCommandBuffer, numLights / 16, 1, 1);
+		vkCmdDispatch(lightCommandBuffer, (numLights + 16 - 1) / 16, 1, 1);
 
 		bufferBarrier.srcAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 		bufferBarrier.dstAccessMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 		bufferBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
 		bufferBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
 		bufferBarrier.dstQueueFamilyIndex = queueFamilyIndices.computeFamily;
-		bufferBarrier.srcQueueFamilyIndex = queueFamilyIndices.computeFamily;
-		vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
+		bufferBarrier.srcQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
+		//vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
 
 		if (vkEndCommandBuffer(lightCommandBuffer) != VK_SUCCESS) {
 			throw std::runtime_error("failed to record command buffer!");
@@ -826,8 +889,8 @@ private:
 		cubo.model = ubo.model;
 		cubo.height = HEIGHT;
 		cubo.width = WIDTH;
-		cubo.xtiles = int(WIDTH / TILE_SIZE) + 1;
-		cubo.ytiles = int(HEIGHT / TILE_SIZE) + 1;
+		cubo.xtiles = int(WIDTH / TILE_SIZE);
+		cubo.ytiles = int(HEIGHT / TILE_SIZE);
 		cubo.max_lights_per_cluster = MAX_LIGHTS_PER_CLUSTER;
 		cubo.number_lights = numLights;
 		cubo.tile_size = TILE_SIZE;
@@ -988,6 +1051,8 @@ private:
 		uboLayoutBinding.pImmutableSamplers = nullptr;
 		uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
+
+		// Frag buffer bindings
 		VkDescriptorSetLayoutBinding samplerLayoutBinding = {};
 		samplerLayoutBinding.binding = 1;
 		samplerLayoutBinding.descriptorCount = 1;
@@ -995,30 +1060,32 @@ private:
 		samplerLayoutBinding.pImmutableSamplers = nullptr;
 		samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-		VkDescriptorSetLayoutBinding lightLayoutBinding = {};
-		lightLayoutBinding.binding = 2;
-		lightLayoutBinding.descriptorCount = 1;
-		lightLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-		lightLayoutBinding.pImmutableSamplers = nullptr;
-		lightLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
 		VkDescriptorSetLayoutBinding normapLayoutBinding = {};
-		normapLayoutBinding.binding = 3;
+		normapLayoutBinding.binding = 2;
 		normapLayoutBinding.descriptorCount = 1;
 		normapLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		normapLayoutBinding.pImmutableSamplers = nullptr;
 		normapLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+		VkDescriptorSetLayoutBinding lightLayoutBinding = {};
+		lightLayoutBinding.binding = 3;
+		lightLayoutBinding.descriptorCount = 1;
+		lightLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		lightLayoutBinding.pImmutableSamplers = nullptr;
+		lightLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
 		VkDescriptorSetLayoutBinding clusterLookupBinding = {};
 		clusterLookupBinding.binding = 4;
 		clusterLookupBinding.descriptorCount = 1;
 		clusterLookupBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		samplerLayoutBinding.pImmutableSamplers = nullptr;
 		clusterLookupBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
 		VkDescriptorSetLayoutBinding clusterDataBinding = {};
 		clusterDataBinding.binding = 5;
 		clusterDataBinding.descriptorCount = 1;
 		clusterDataBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		samplerLayoutBinding.pImmutableSamplers = nullptr;
 		clusterDataBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
 		std::array<VkDescriptorSetLayoutBinding, 6> bindings = { uboLayoutBinding, samplerLayoutBinding, lightLayoutBinding, normapLayoutBinding, clusterLookupBinding, clusterDataBinding };
@@ -1039,7 +1106,7 @@ private:
 		poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		poolSizes[1].descriptorCount = 2;
 		poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-		poolSizes[2].descriptorCount = 5;
+		poolSizes[2].descriptorCount = 6;
 
 		VkDescriptorPoolCreateInfo poolInfo = {};
 		poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1116,17 +1183,17 @@ private:
 		descriptorWrites[2].dstSet = descriptorSet;
 		descriptorWrites[2].dstBinding = 2;
 		descriptorWrites[2].dstArrayElement = 0;
-		descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		descriptorWrites[2].descriptorCount = 1;
-		descriptorWrites[2].pBufferInfo = &lightInfo;
+		descriptorWrites[2].pImageInfo = &norMapInfo;
 
 		descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		descriptorWrites[3].dstSet = descriptorSet;
 		descriptorWrites[3].dstBinding = 3;
 		descriptorWrites[3].dstArrayElement = 0;
-		descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 		descriptorWrites[3].descriptorCount = 1;
-		descriptorWrites[3].pImageInfo = &norMapInfo;
+		descriptorWrites[3].pBufferInfo = &lightInfo;
 
 		descriptorWrites[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		descriptorWrites[4].dstSet = descriptorSet;

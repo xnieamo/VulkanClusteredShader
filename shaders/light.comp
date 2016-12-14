@@ -3,6 +3,9 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
+#define MAX_INT 2147483647
+#define MIN_INT -1 * 2147483647
+
 struct Light 
 {
 	vec4 pos;
@@ -11,25 +14,7 @@ struct Light
 };
 
 
-layout(std430, binding = 0) buffer LightsA
-{
-	Light lights[];
-};
-
-// layout(std430, binding = 1) buffer Clusters
-// {
-// 	uint lightIndexLookup[];
-// };
-
-// layout(std430, binding = 2) buffer ClustersData
-// {
-// 	ivec2 lookupIndices[];
-// 	// uint lookupIndices[][2];
-// };
-
-layout(local_size_x = 16, local_size_y = 16) in;
-
-layout(binding = 3) uniform UniformBufferObject {
+layout(binding = 0) uniform UniformBufferObject {
 	int height;
     int width;
     int xtiles;
@@ -43,7 +28,27 @@ layout(binding = 3) uniform UniformBufferObject {
 
 } ubo;
 
-const float Z_explicit[10] = {0.1f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f};
+layout(std430, binding = 1) buffer LightsA
+{
+	Light lights[];
+};
+
+layout(std430, binding = 2) buffer Clusters
+{
+	uint lightIndexLookup[];
+};
+
+layout(std430, binding = 3) buffer ClustersData
+{
+	// ivec2 lookupIndices[];
+	uint lookupIndices[][2];
+};
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+
+
+const float Z_explicit[10] = {0.05, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f};
 int findZ (float z) {
 
     float minDiff = 1000000.f;
@@ -64,6 +69,93 @@ bool inBound(int minVal, int maxVal, int minBound, int maxBound) {
 
 shared uint counter;
 shared uint maxIndex;
+
+void assignLight(Light l, int index) {
+	int X = ubo.xtiles;
+	int Y = ubo.ytiles;
+	int Z = 10;
+
+	// Get position and attenuation distance 
+	vec4 pos = l.pos;
+	float attDist = l.vel[3]*2;
+
+	// Set w to 1
+	pos[3] = 1.0;
+
+	// Find corners of AABB
+	vec4[8] aabb = {
+		vec4(pos + vec4(attDist, attDist, attDist, 0.f)),
+		vec4(pos + vec4(attDist, attDist, -attDist, 0.f)),
+		vec4(pos + vec4(attDist, -attDist, attDist, 0.f)),
+		vec4(pos + vec4(attDist, -attDist, -attDist, 0.f)),
+		vec4(pos + vec4(-attDist, attDist, attDist, 0.f)),
+		vec4(pos + vec4(-attDist, attDist, -attDist, 0.f)),
+		vec4(pos + vec4(-attDist, -attDist, attDist, 0.f)),
+		vec4(pos + vec4(-attDist, -attDist, -attDist, 0.f))
+	};
+
+	// Find max/min bounds in screen space
+	ivec3 min_screen = ivec3(MAX_INT);
+	ivec3 max_screen = ivec3(MIN_INT);
+	for (int i = 0; i < 8; i++) {
+		vec4 pos = aabb[i];
+
+		// Project into view space
+		pos = ubo.proj * ubo.view * ubo.model * pos;
+		float z = pos[2];
+		pos = pos / pos.w;
+
+		// Calculate screen space coords for X and Y
+		int Sx = clamp(int(round((pos.x + 1) / 2.f * ubo.width)) / ubo.tile_size, -1, X + 1);
+		int Sy = clamp(int(round((1 - pos.y) / 2.f * ubo.height)) / ubo.tile_size, -1, Y + 1);
+
+		// Update min and max
+		if (Sx < min_screen[0]) { min_screen[0] = Sx; }
+		if (Sx > max_screen[0]) { max_screen[0] = Sx; }
+		if (Sy < min_screen[1]) { min_screen[1] = Sy; }
+		if (Sy > max_screen[1]) { max_screen[1] = Sy; }
+
+		// Find Z plane and update min/max
+		int Sz = findZ(z);
+		if (Sz < min_screen[2]) { min_screen[2] = Sz; }
+		if (Sz > max_screen[2]) { max_screen[2] = Sz; }
+	}
+
+	// Clamp final min/max values if part of or the entire AABB
+	// intersects with the clusters
+	if (!(min_screen[0] < 0 && max_screen[0] < 0) && !(min_screen[0] > X && max_screen[0] > X)) {
+		min_screen[0] = clamp(min_screen[0], 0, X);
+		max_screen[0] = clamp(max_screen[0], 0, X);
+	}
+
+	if (!(min_screen[1] < 0 && max_screen[1] < 0) && !(min_screen[1] > Y && max_screen[1] > Y)) {
+		min_screen[1] = clamp(min_screen[1], 0, Y);
+		max_screen[1] = clamp(max_screen[1], 0, Y);
+	}
+
+	if (!(min_screen[2] < 0 && max_screen[2] < 0) && !(min_screen[2] > Z && max_screen[2] > Z)) {
+		min_screen[2] = clamp(min_screen[2]-1, 0, Z);
+		max_screen[2] = clamp(max_screen[2]+1, 0, Z);
+	}
+
+	// Loop over indices and add light to buffer
+	if (inBound(min_screen[0], max_screen[0], 0, X) && inBound(min_screen[1], max_screen[1], 0, Y)) {
+		for (int i = min_screen[0]; i <= max_screen[0]; i++) {
+			for (int j = min_screen[1]; j <= max_screen[1]; j++) {
+				for (int k = min_screen[2]; k <= max_screen[2]; k++) {
+				
+					if (i >= 0 && j >= 0 && k >= 0) {
+						int clusterIdx = i + j * (X+1) + k * (Y+1) * (X+1);
+						uint dataIdx = atomicAdd(lookupIndices[clusterIdx][1], 1);
+						if (dataIdx < ubo.max_lights_per_cluster)
+							lightIndexLookup[dataIdx] = index;
+					}
+				}
+			}
+		}
+	}
+
+}
 
 void main()
 {
@@ -91,10 +183,10 @@ void main()
 	
 	// // Find cluster index
 	// // Bind light in AABB
-	// float dist = vel[3];
+	// float attDist = vel[3];
 	// pos[3] = 1.f;
-	// vec4 posMax = pos + vec4(vec3(dist), 0.f);
-	// vec4 posMin = pos - vec4(vec3(dist), 0.f);
+	// vec4 posMax = pos + vec4(vec3(attDist), 0.f);
+	// vec4 posMin = pos - vec4(vec3(attDist), 0.f);
 
 	// // 1. Convert AABB to view space
 	// vec4 viewMax = ubo.proj * ubo.view * ubo.model * posMax;
