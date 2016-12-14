@@ -139,6 +139,7 @@ private:
 
 	VDeleter<VkSemaphore> imageAvailableSemaphore{ device, vkDestroySemaphore };
 	VDeleter<VkSemaphore> renderFinishedSemaphore{ device, vkDestroySemaphore };
+	VDeleter<VkSemaphore> computeFinishedSemaphore{ device, vkDestroySemaphore };
 
 	// Normal map
 	VDeleter<VkImage> norMapImage{ device, vkDestroyImage };
@@ -436,9 +437,9 @@ private:
 		lights.resize(numLights);
 		for (int i = 0; i < numLights; i++) {
 			glm::vec3 pos;
-			pos.x = (u01(rng) - 0.5f) * 20.f;
-			pos.y = (u01(rng)) * 30.f;
-			pos.z = (u01(rng) - 0.5f) * 40.f;
+			pos.x = (u01(rng) - 0.5f) * 10.f;
+			pos.y = (u01(rng)) * 10.f;
+			pos.z = (u01(rng) - 0.5f) * 10.f;
 
 			glm::vec4 col;
 			col.r = u01(rng);
@@ -446,7 +447,7 @@ private:
 			col.b = u01(rng);
 			col.a = 1.f;
 
-			float radius = u01(rng) * 10.f + 1.f;
+			float radius = 3.f;
 			float dist = glm::sqrt(radius * radius / 3.f);
 			lights[i].pos = glm::vec4(pos, radius);
 			lights[i].col = col;
@@ -661,20 +662,36 @@ private:
 		bufferBarrier.dstQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
 		bufferBarrier.srcQueueFamilyIndex = queueFamilyIndices.computeFamily;
 
-		//vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
+		VkBufferMemoryBarrier lightBarrier = {};
+		lightBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+		lightBarrier.buffer = clusterIndexBuffer;
+		lightBarrier.size = sizeof(int) * clusterIndexSize;
+		lightBarrier.srcAccessMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		lightBarrier.dstAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+		lightBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		lightBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+		lightBarrier.dstQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
+		lightBarrier.srcQueueFamilyIndex = queueFamilyIndices.computeFamily;
+
+		std::array<VkBufferMemoryBarrier, 2> barriers = { bufferBarrier, lightBarrier };
+
+		vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 2, barriers.data(), 0, nullptr);
 		vkCmdBindPipeline(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipeline);
 		vkCmdBindDescriptorSets(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipelineLayout, 0, 1, &lightDescriptorSet, 0, 0);
 		vkCmdDispatch(lightCommandBuffer, (WIDTH + TILE_SIZE - 1) / TILE_SIZE, (WIDTH + TILE_SIZE - 1) / TILE_SIZE, 1);
 
 		//vkCmdDispatch(lightCommandBuffer, 1, 1, 1);
 
-		bufferBarrier.srcAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-		bufferBarrier.dstAccessMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-		bufferBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-		bufferBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-		bufferBarrier.dstQueueFamilyIndex = queueFamilyIndices.computeFamily;
-		bufferBarrier.srcQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
-		//vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
+		for (int i = 0; i < 2; i++) {
+			barriers[i].srcAccessMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+			barriers[i].dstAccessMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+			barriers[i].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+			barriers[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+			barriers[i].dstQueueFamilyIndex = queueFamilyIndices.computeFamily;
+			barriers[i].srcQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
+		}
+
+		vkCmdPipelineBarrier(lightCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 2, barriers.data(), 0, nullptr);
 
 		if (vkEndCommandBuffer(lightCommandBuffer) != VK_SUCCESS) {
 			throw std::runtime_error("failed to record command buffer!");
@@ -792,7 +809,7 @@ private:
 
 			//updateClusterDataBuffer();
 			updateUniformBuffer();
-			updateLightBuffer();
+			//updateLightBuffer();
 			drawFrame();
 			//assignLights();
 		}
@@ -878,7 +895,9 @@ private:
 
 		// Camera Positions
 		ubo.view = glm::lookAt(P, P + F, U);
-		ubo.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float)swapChainExtent.height, 0.1f, 100.0f);
+		//ubo.view = glm::lookAt(P, glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 1.f, 0.f));
+		//ubo.view = glm::transpose(glm::rotate(rotate[0], rotate[1], 0.f)) * glm::translate(glm::mat4(1.0f), -P);
+		ubo.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float)swapChainExtent.height, 1.0f, 1000.0f);
 		ubo.proj[1][1] *= -1;
 		ubo.cPos = P;
 
@@ -900,6 +919,9 @@ private:
 		cubo.max_lights_per_cluster = MAX_LIGHTS_PER_CLUSTER;
 		cubo.number_lights = numLights;
 		cubo.tile_size = TILE_SIZE;
+		cubo.pos = glm::vec4(P, 1.f);
+		cubo.dir = glm::vec4(P + F, 0.f);
+		cubo.up = glm::vec4(U, 0.f);
 
 		void* cdata;
 		vkMapMemory(device, computeUniformStagingBufferMemory, 0, sizeof(cubo), 0, &cdata);
@@ -935,8 +957,8 @@ private:
 			submitInfo.pWaitDstStageMask = nullptr;
 			submitInfo.commandBufferCount = 1;
 			submitInfo.pCommandBuffers = &lightCommandBuffer;
-			submitInfo.signalSemaphoreCount = 0;
-			submitInfo.pSignalSemaphores = nullptr;
+			submitInfo.signalSemaphoreCount = 1;
+			submitInfo.pSignalSemaphores = &computeFinishedSemaphore;
 
 			if (vkQueueSubmit(computeQueue, 1, &submitInfo, lightFence) != VK_SUCCESS) {
 				throw std::runtime_error("failed to submit draw command buffer!");
@@ -952,9 +974,9 @@ private:
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
 		// Semaphore to wait on before starting this operation
-		VkSemaphore waitSemaphores[] = { imageAvailableSemaphore };
-		VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-		submitInfo.waitSemaphoreCount = 1;
+		VkSemaphore waitSemaphores[] = { imageAvailableSemaphore, computeFinishedSemaphore };
+		VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT };
+		submitInfo.waitSemaphoreCount = 2;
 		submitInfo.pWaitSemaphores = waitSemaphores;
 		submitInfo.pWaitDstStageMask = waitStages;
 
@@ -2098,7 +2120,9 @@ private:
 		semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
 		if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, imageAvailableSemaphore.replace()) != VK_SUCCESS ||
-			vkCreateSemaphore(device, &semaphoreInfo, nullptr, renderFinishedSemaphore.replace()) != VK_SUCCESS) {
+			vkCreateSemaphore(device, &semaphoreInfo, nullptr, renderFinishedSemaphore.replace()) != VK_SUCCESS || 
+			vkCreateSemaphore(device, &semaphoreInfo, nullptr, computeFinishedSemaphore.replace()) != VK_SUCCESS)
+		{
 
 			throw std::runtime_error("failed to create semaphores!");
 		}

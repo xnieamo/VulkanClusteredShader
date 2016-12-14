@@ -71,7 +71,9 @@ namespace SceneStructs {
 		glm::mat4 model;
 		glm::mat4 view;
 		glm::mat4 proj;
-		glm::vec3 cPos;
+		glm::vec4 pos;
+		glm::vec4 dir;
+		glm::vec4 up;
 
 	};
 

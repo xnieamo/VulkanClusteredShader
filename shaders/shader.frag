@@ -76,10 +76,10 @@ void main() {
     
 	vec4 color;
 	vec3 nor = texture(norSampler, fragTexCoord).xyz;
-	nor = applyNormalMap(fragNormal, nor);
-
 	vec3 viewDir = normalize(camPos - fragPosition);
 	
+	nor = applyNormalMap(fragNormal, nor);
+
 
 	// Find screen space tile
     int Sx = int(gl_FragCoord.x / 32);
@@ -90,22 +90,16 @@ void main() {
 
     // Find Z cluster
     // http://stackoverflow.com/questions/6652253/getting-the-true-z-value-from-the-depth-buffer
-    float zNear = 0.1f;
-    float zFar  = 100.f;
-    float z_b = gl_FragCoord.z;
-    float z_n = 2.0 * z_b - 1.0;
-    float z_e = 2.0 * zNear * zFar / (zFar + zNear - z_n * (zFar - zNear));
-
-    // Find Z cluster index
-    int Sz = findZ(z_e);
+    // float zNear = 0.1f;
+    // float zFar  = 100.f;
+    // float z_b = gl_FragCoord.z;
+    // float z_n = 2.0 * z_b - 1.0;
+    // float z_e = 2.0 * zNear * zFar / (zFar + zNear - z_n * (zFar - zNear));
+    // int Sz = findZ(z_e);
 
     // Find unrolled index
     int l_idx = Sx + Sy * X;// + Sz * X * Y;
 
-    ivec2 lightIdx = ivec2(lookupIndices[l_idx][0], lookupIndices[l_idx][1]);
-
-   	int test = lookupIndexBuffer.data[0];
-   	
    	// Debug map
    	// AFDSHFBAISDFHLKSDFHKLSDFHKLSFHKLDFHLKJDS LOOK HERE ALJF:LDSHF:LSDJFL:SDJGL:KDSJG:LSDGJL:KDFJ
    	// DSFL:SDJFL:SDKFJKDS:FJ :LDSJKFL:JDSLFKJ FLIP BOOL LAK:JFD:LDSKJF:LDSKJF:LDSKFJ:LDSKJF:LDSJF:
@@ -118,20 +112,15 @@ void main() {
 		// uint end =  lightIdx[0] + lightIdx[1];
 		uint start = l_idx * 10;
 		uint end = l_idx * 10 + 50;
-		// uint start = 0;
-		// uint end = 50;
 
 		for (uint i = start; i < end; i++) {
-	    	// Light light = lights[lightIndexLookup[i]];
-
 			int light_index = lookupIndexBuffer.data[i];
 			if (light_index < 0)
 				break;
 
 	    	vec4 pos = lights[light_index].pos;
 	    	vec4 col = lights[light_index].col;
-	    	// vec4 pos = lights[i].pos;
-	    	// vec4 col = lights[i].col;
+
 	    	vec3 lightDir = pos.xyz - fragPosition;
 	    	float distance = length(lightDir);
 	    	lightDir = lightDir / distance;
@@ -148,7 +137,7 @@ void main() {
 	}
 
 
- //    // Real 
+ //    // Forward 
  //    for (int i = 0; i < numLights; i++) {
 
  //    	vec4 pos = lights[i].pos;
