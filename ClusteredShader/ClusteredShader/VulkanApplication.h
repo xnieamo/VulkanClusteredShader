@@ -37,7 +37,7 @@
 
 #define WIDTH 1200
 #define HEIGHT 1000
-#define TILE_SIZE 32
+#define TILE_SIZE 64
 #define MAX_LIGHTS_PER_CLUSTER 50
 #define CPU_CULL 0
 
@@ -430,7 +430,7 @@ private:
 		lights.resize(numLights);
 		for (int i = 0; i < numLights; i++) {
 			glm::vec3 pos;
-			pos.x = (u01(rng) - 0.5f) * 40.f;
+			pos.x = (u01(rng) - 0.5f) * 30.f;
 			pos.y = (u01(rng)) * 10.f;
 			pos.z = (u01(rng) - 0.5f) * 10.f;
 
@@ -440,7 +440,7 @@ private:
 			col.b = u01(rng);
 			col.a = 1.f;
 
-			float radius = 3.f;
+			float radius = 5.f;
 			float dist = glm::sqrt(radius * radius / 3.f);
 			lights[i].pos = glm::vec4(pos, radius);
 			lights[i].col = col;

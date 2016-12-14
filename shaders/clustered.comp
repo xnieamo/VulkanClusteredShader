@@ -52,6 +52,7 @@ vec4 frustumPlanes[6];
 // Shared local storage for visible indices, will be written out to the global buffer at the end
 shared int visibleLightIndices[LOCAL_BUFFER_SIZE];
 shared int visibleLightZPlane[LOCAL_BUFFER_SIZE];
+shared float visibleLightZDepth[LOCAL_BUFFER_SIZE];
 shared uint ZCounters[10];
 shared int ZTargets[3];
 
@@ -81,8 +82,8 @@ int findZ (float z) {
 }
 
 
-#define TILE_SIZE 32
-#define THREAD_COUNT 6
+#define TILE_SIZE 16
+#define THREAD_COUNT 4
 layout(local_size_x = THREAD_COUNT, local_size_y = THREAD_COUNT) in;
 void main() {
 
@@ -143,27 +144,23 @@ void main() {
 	    // Compute planes
 	    vec3 eye = vec3(0.0, 0.0, 0.0);
 	    for (int i = 0; i < 4; i++) {
-			frustumPlanes[i].xyz = -normalize(cross(viewFrustum[i], viewFrustum[(i + 1) % 4]));
+			frustumPlanes[i].xyz = normalize(cross(viewFrustum[i], viewFrustum[(i + 1) % 4]));
 			frustumPlanes[i].w = 0.0;//dot(frustumPlanes[i].xyz, eye);
 	    }
 
-	    // frustumPlanes[4].xyz = normalize(cross(viewFrustum[1] - viewFrustum[0], viewFrustum[2] - viewFrustum[0]));
-	    frustumPlanes[4].w = 0.0;
 	    frustumPlanes[4] = vec4(0.0f, 0.0f, 1.0f, -15.0f);
-		frustumPlanes[4] = vec4(0.0f, 0.0f, -1.0f, 100.0f);
+		frustumPlanes[5] = vec4(0.0f, 0.0f, -1.0f, 100.0f);
 	    // frustumPlanes[5] = frustumPlanes[4];
 	}
 
 
 	barrier();
 
-	// Test lights against tiles
-	// WORKS??
-
+	// Light culling
 	uint lightCount = ubo.number_lights;
 	uint threadCount = THREAD_COUNT * THREAD_COUNT;
 	uint passCount = (lightCount + threadCount - 1) / threadCount;
-	// uint lightCounter = 0;
+	float depth, radius;
 	for (uint i = 0; i < passCount; i++) {
 		// Get the lightIndex to test for this thread / pass. If the index is >= light count, then this thread can stop testing lights
 		uint lightIndex = i * threadCount + (itemID.y * THREAD_COUNT + itemID.x);
@@ -173,126 +170,52 @@ void main() {
 		}
 
 		vec4 position = lightBuffer.lights[lightIndex].pos;
-		float radius = lightBuffer.lights[lightIndex].vel.w * 1.5;
+		radius = lightBuffer.lights[lightIndex].vel.w * 1.5;
 		
 		vec4 ray = ubo.proj * ubo.view * ubo.model * vec4(normalize(position.xyz), 0.0);
 		float transformLength = length(ray);
 
 		position = ubo.proj * ubo.view * ubo.model * vec4(position.xyz, 1.0);
-
-
-
-		float depth = position.w;
+		depth = position.w;
 		position /= position.w;
 
 		// We check if the light exists in our frustum
 		bool inFrustum = true;
-		for (uint j = 0; j < 6; j++) {
-			if (dot(position.xyz, frustumPlanes[j].xyz) + frustumPlanes[i].w < - radius) {
+		for (uint j = 0; j < 4; j++) {
+			if (dot(position.xyz, frustumPlanes[j].xyz) < -radius) {
 				inFrustum = false;
 				break;
 			}
-
-			// float dist = dot(frustumPlanes[j], vec4(position.xyz, 1.0));
-			// inFrustum = inFrustum && (dist <= radius);
 		}
 
 		// If greater than zero, then it is a visible light
-		if (inFrustum && depth <= 20.0) {
+		if (inFrustum) {
 			// Add index to the shared array of visible indices
 			uint offset = atomicAdd(visibleLightCount, 1);
 			visibleLightIndices[offset] = int(lightIndex);
 			visibleLightZPlane[offset] = findZ(depth);
-
-			// int ZZ = findZ(depth);
-			// int a = ZZ - 1;
-			// int b = ZZ;
-			// int c = ZZ + 1;
-			// if (a < b) {
-			// 	uint ll_index = atomicAdd(ZCounters[a], 1);
-			// 	if (ll_index < ubo.max_lights_per_cluster) {
-			// 		ll_index = (index + a * tileNumber.x * tileNumber.y) * 50;
-			// 		indexLookupBuffer.data[ll_index] = int(lightIndex);
-			// 	}
-			// }
-
-			// if (b <= c) {
-			// 	uint ll_index = atomicAdd(ZCounters[b], 1);
-			// 	if (ll_index < ubo.max_lights_per_cluster) {
-			// 		ll_index = (index + a * tileNumber.x * tileNumber.y) * 50;
-			// 		indexLookupBuffer.data[ll_index] = int(lightIndex);
-			// 	}
-			// }
-
-			// if (b < c) {
-			// 	uint ll_index = atomicAdd(ZCounters[c], 1);
-			// 	if (ll_index < ubo.max_lights_per_cluster) {
-			// 		ll_index = (index + a * tileNumber.x * tileNumber.y) * 50;
-			// 		indexLookupBuffer.data[ll_index] = int(lightIndex);
-			// 	}
-			// }
-
-			// visibleLightIndices[offset] = int(transformLength * depth * 100);
-			
-
-		}
-	}
-
-	barrier();
-
-
-	// 3 threads should fill the global light buffer
-	passCount = (visibleLightCount + threadCount - 1) / threadCount;
-	for (uint i = 0; i < passCount; i++) {
-		// Get the lightIndex to test for this thread / pass. If the index is >= light count, then this thread can stop testing lights
-		uint lightIndex = i * threadCount + (itemID.y * THREAD_COUNT + itemID.x);
-		if (lightIndex > visibleLightCount)
-			break;
-
-		uint z = visibleLightZPlane[lightIndex];
-		uint min_z = max(0, z - 0);
-		uint max_z = min(10, z + 0);
-
-
-		for (uint j = min_z; j <= max_z; j++) {
-			uint offset =  (index + gl_LocalInvocationIndex * tileNumber.x * tileNumber.y) * 50;
-			uint place = atomicAdd(ZCounters[j], 1);
-			indexLookupBuffer.data[offset + place] = visibleLightIndices[lightIndex];
+			visibleLightZDepth[offset] = depth;
 		}
 	}
 
 	barrier();
 
 	if (gl_LocalInvocationIndex < 10) {
-		// uint counter = ZCounters[gl_LocalInvocationIndex];
-		// if (counter < ubo.max_lights_per_cluster) {
-		// 	uint i = (index + gl_LocalInvocationIndex * tileNumber.x * tileNumber.y) * 50 + counter;
-		// 	indexLookupBuffer.data[i + 1] = -1;
-		// }
 
 		uint offset =  (index + gl_LocalInvocationIndex * tileNumber.x * tileNumber.y) * 50;
-		// for (uint i = 0; i < min(visibleLightCount, ubo.max_lights_per_cluster) ; i++) {
-		// 	uint place = atomicAdd(ZCounters[gl_LocalInvocationIndex], 1);
-		// 	if (place >= 50)
-		// 		break;
-		// 	indexLookupBuffer.data[offset + place] = visibleLightIndices[i];
-		// }
+		for (uint i = 0; i < min(visibleLightCount, ubo.max_lights_per_cluster) ; i++) {
+			uint place = atomicAdd(ZCounters[gl_LocalInvocationIndex], 1);
+			if (place >= 50)
+				break;
+			if (visibleLightZDepth[i] - Z_explicit[gl_LocalInvocationIndex] >= radius)
+				continue;
+			indexLookupBuffer.data[offset + place] = visibleLightIndices[i];
+		}
 
-		// if (ZCounters[gl_LocalInvocationIndex] < ubo.max_lights_per_cluster) {
-		// 	indexLookupBuffer.data[ZCounters[gl_LocalInvocationIndex] + offset] = -1;
-		// }
+		if (ZCounters[gl_LocalInvocationIndex] < ubo.max_lights_per_cluster) {
+			indexLookupBuffer.data[ZCounters[gl_LocalInvocationIndex] + offset] = -1;
+		}
 
-		// uint offset = index * 50; // Determine bosition in global buffer
-		// uint zMulti = tileNumber.x * tileNumber.y;
-		// for (uint i = 0; i < min(visibleLightCount, ubo.max_lights_per_cluster) ; i++) {
-		// 	for (uint j = max(0, visibleLightZPlane[i] - 2); j < min(10, visibleLightZPlane[i] + 2); j++) {
-		// 		indexLookupBuffer.data[i + offset + j * 50 * zMulti] = visibleLightIndices[i];
-		// 	}
-		// }
-
-		// if (visibleLightCount < ubo.max_lights_per_cluster) {
-		// 	indexLookupBuffer.data[visibleLightCount + offset] = -1;
-		// }
 	}
 
 }

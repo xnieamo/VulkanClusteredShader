@@ -43,6 +43,7 @@ const float Z_explicit[10] = {0.05f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f,
 
 #define WIDTH 1200
 #define HEIGHT 1000
+#define TILE_SIZE 64
 
 vec3 applyNormalMap(vec3 geomnor, vec3 normap) {
     normap = normap * 2.0 - 1.0;
@@ -82,11 +83,11 @@ void main() {
 
 
 	// Find screen space tile
-    int Sx = int(gl_FragCoord.x / 32);
-    int Sy = int(gl_FragCoord.y / 32);
+    int Sx = int(gl_FragCoord.x / TILE_SIZE);
+    int Sy = int(gl_FragCoord.y / TILE_SIZE);
 
-    int X = int(WIDTH / 32) + 1;
-    int Y = int(HEIGHT / 32) + 1;
+    int X = int(WIDTH / TILE_SIZE) + 1;
+    int Y = int(HEIGHT / TILE_SIZE) + 1;
 
     // Find Z cluster
     // http://stackoverflow.com/questions/6652253/getting-the-true-z-value-from-the-depth-buffer
@@ -99,7 +100,7 @@ void main() {
     int Sz = findZ(z_e);
 
     // Find unrolled index
-    int l_idx = Sx + Sy * X + Sz * X * Y;
+    int l_idx = Sx + Sy * X;// + Sz * X * Y;
     // int l_idx2 = Sx + Sy * X + Sz * X * Y;
     // clusterTable.lookupIndices[l_idx][0] = int(Sz);
     // int[] lightIdx = clusterTable.lookupIndices[l_idx];
@@ -107,6 +108,7 @@ void main() {
    	// Debug map
    	// AFDSHFBAISDFHLKSDFHKLSDFHKLSFHKLDFHLKJDS LOOK HERE ALJF:LDSHF:LSDJFL:SDJGL:KDSJG:LSDGJL:KDFJ
    	// DSFL:SDJFL:SDKFJKDS:FJ :LDSJKFL:JDSLFKJ FLIP BOOL LAK:JFD:LDSKJF:LDSKJF:LDSKFJ:LDSKJF:LDSJF:
+
    	if (false)
    		outColor = vec4(0.f, 0.f, 0.f, 1.f);
    	else 
@@ -160,7 +162,17 @@ void main() {
 	// // Actual output color
  //    outColor = clamp(1.f * color, 0.001, 1.0);
 
-
+	// Cluster of lights view
+	// uint start = l_idx * 50;
+	// uint end = l_idx * 50 + 50;
+	// uint lightCC = 0;
+	// for (uint i = start; i < end; i++) {
+	// 	int light_index = lookupIndexBuffer.data[i];
+	// 	if (light_index < 0)
+	// 		break;
+	// 	lightCC++;
+ //    }
+	// outColor = vec4(vec3(float(lightCC) / 50.0), 1.0);
 
     // Cluster debug
     // int zz = Sx + Sy * X + Sz * X * Y;

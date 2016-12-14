@@ -38,6 +38,10 @@ layout(std430, binding = 2) buffer IndexLookup
 	int data[];
 } indexLookupBuffer;
 
+layout(std430, binding = 3) buffer ClustersData
+{
+	vec4 frustums[];
+} clusterTable;
 
 // Shared values between all the threads in the group
 shared uint visibleLightCount;
@@ -96,8 +100,8 @@ void createFrustumPlanes() {
 	}
 }
 
-#define TILE_SIZE 32
-#define THREAD_COUNT 6
+#define TILE_SIZE 64
+#define THREAD_COUNT 2
 layout(local_size_x = THREAD_COUNT, local_size_y = THREAD_COUNT) in;
 void main() {
 
@@ -147,26 +151,24 @@ void main() {
 	    vec3 viewFrustum[4];
 	    for (int i = 0; i < 4; i++) {
 	    	vec2 tex = screenFrustum[i] / vec2(ubo.width, ubo.height);
-	    	
-
 	    	vec4 view = vec4(vec2(tex.x, 1.0f - tex.y) * 2.0f - 1.0f, 1.0f, 1.0f);
-	    	// view /= view.w;
 	    	viewFrustum[i] = view.xyz;
 	    }
 
 	    // Compute planes
 	    vec3 eye = vec3(0.0, 0.0, 0.0);
 	    for (int i = 0; i < 4; i++) {
-			frustumPlanes[i].xyz = -normalize(cross(viewFrustum[i], viewFrustum[(i + 1) % 4]));
-			frustumPlanes[i].w = 0.0;//dot(frustumPlanes[i].xyz, eye);
+			frustumPlanes[i].xyz = normalize(cross(viewFrustum[i], viewFrustum[(i + 1) % 4]));
+			frustumPlanes[i].w = 0.0;
 	    }
+
+	    frustumPlanes[4] = vec4(0.0f, 0.0f, 1.0f, -15.0f);
+		frustumPlanes[5] = vec4(0.0f, 0.0f, -1.0f, 100.0f);
 	}
 
 
 	barrier();
 
-	// Test lights against tiles
-	// WORKS??
 
 	uint lightCount = ubo.number_lights;
 	uint threadCount = THREAD_COUNT * THREAD_COUNT;
@@ -192,21 +194,19 @@ void main() {
 		// We check if the light exists in our frustum
 		bool inFrustum = true;
 		for (uint j = 0; j < 4; j++) {
-			if (dot(position.xyz, frustumPlanes[j].xyz) + frustumPlanes[i].w < - radius) {
+			if (dot(position.xyz, frustumPlanes[j].xyz) < -radius) {
 				inFrustum = false;
 				break;
 			}
-
-			// float dist = dot(frustumPlanes[j], vec4(position.xyz, 1.0));
-			// inFrustum = inFrustum && (dist <= radius);
 		}
 
 		// If greater than zero, then it is a visible light
-		if (inFrustum && depth >= 0.01) {
+		if (inFrustum) {
 			// Add index to the shared array of visible indices
 			uint offset = atomicAdd(visibleLightCount, 1);
-			// visibleLightIndices[offset] = int(lightIndex);
-			visibleLightIndices[offset] = int(depth * 100);
+			visibleLightIndices[offset] = int(lightIndex);
+			// visibleLightIndices[offset] = int((dot(position.xyz, frustumPlanes[4].xyz) + frustumPlanes[4].w)  * 100 );
+			// visibleLightIndices[offset] = int((depth)  * 100 );
 		}
 	}
 
