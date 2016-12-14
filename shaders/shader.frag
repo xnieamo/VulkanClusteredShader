@@ -99,11 +99,11 @@ void main() {
     // Find Z cluster index
     int Sz = findZ(z_e);
 
-    int l_idx = Sx + Sy * X + Sz * X * Y;
-    // ivec3 lightIdx = lookupIndices[l_idx];
+    // Find unrolled index
+    int l_idx = Sx + Sy * X;// + Sz * X * Y;
+
     ivec2 lightIdx = ivec2(lookupIndices[l_idx][0], lookupIndices[l_idx][1]);
-    // Light light = lights[lightIndexLookup[0]];
-   	// lookupIndices[l_idx][0] = l_idx;
+
    	int test = lookupIndexBuffer.data[0];
    	
    	// Debug map
@@ -114,17 +114,17 @@ void main() {
 
 		// uint start = lightIdx[0];
 		// uint end =  lightIdx[0] + lightIdx[1];
-		// uint start = l_idx * 10;
-		// uint end = l_idx * 10 + 50;
-		uint start = 0;
-		uint end = 50;
+		uint start = l_idx * 10;
+		uint end = l_idx * 10 + 50;
+		// uint start = 0;
+		// uint end = 50;
 
 		for (uint i = start; i < end; i++) {
 	    	// Light light = lights[lightIndexLookup[i]];
-	    	// vec4 pos = lights[lightIndexLookup[i]].pos;
-	    	// vec4 col = lights[lightIndexLookup[i]].col;
-	    	vec4 pos = lights[i].pos;
-	    	vec4 col = lights[i].col;
+	    	vec4 pos = lights[lookupIndexBuffer.data[i]].pos;
+	    	vec4 col = lights[lookupIndexBuffer.data[i]].col;
+	    	// vec4 pos = lights[i].pos;
+	    	// vec4 col = lights[i].col;
 	    	vec3 lightDir = pos.xyz - fragPosition;
 	    	float distance = length(lightDir);
 	    	lightDir = lightDir / distance;
