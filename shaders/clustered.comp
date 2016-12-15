@@ -45,21 +45,14 @@ layout(std430, binding = 2) buffer IndexLookup
 
 layout(std430, binding = 3) buffer ClustersData
 {
-	int lookupIndices[][2];
+	vec4 frustums[];
 } clusterTable;
-
-#define LOCAL_BUFFER_SIZE 100
 
 
 // Shared values between all the threads in the group
 shared uint visibleLightCount[10];
-vec4 frustumPlanes[6][10];
-// Shared local storage for visible indices, will be written out to the global buffer at the end
-// shared int visibleLightIndices[LOCAL_BUFFER_SIZE];
-// shared int visibleLightZPlane[LOCAL_BUFFER_SIZE];
-// shared float visibleLightZDepth[LOCAL_BUFFER_SIZE];
-// shared uint ZCounters[10];
-// shared int ZTargets[3];
+vec4 frustumPlanes[6];
+shared uint counterCounter;
 
 shared mat4 viewProjection;
 shared mat4 inverseProj;
@@ -69,25 +62,11 @@ shared mat4 inv_projView;
 
 
 // const float Z_explicit[10] = {0.00f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f};
-const float Z_explicit[10] = {0.01f, 4.5f, 6.7f, 9.0f, 16.5f, 22.1f, 30.5f, 41.8f, 56.8.f, 75.f};//, 100.f};
+const float Z_explicit[11] = {0.01f, 4.5f, 6.7f, 9.0f, 16.5f, 22.1f, 30.5f, 41.8f, 56.8f, 75.f, 100.f};
 const float max_depth = 100.f;
-int findZ (float z) {
-
-    float minDiff = 1000000.f;
-    int minIdx = -1;
-    for (int i = 0; i < 10; i++) {
-    	float tempDiff = z - Z_explicit[i];
-    	if (tempDiff < minDiff && tempDiff >= 0.f) {
-    		minDiff = tempDiff;
-    		minIdx = i;
-    	}
-    }
-	return minIdx;
-}
-
 
 #define TILE_SIZE 32
-#define THREAD_COUNT 4
+#define THREAD_COUNT 8
 layout(local_size_x = THREAD_COUNT, local_size_y = 1) in;
 void main() {
 
@@ -97,20 +76,18 @@ void main() {
 	ivec2 itemID = ivec2(gl_LocalInvocationID.xy);
 	ivec2 tileID = ivec2(gl_WorkGroupID.xy);
 	ivec2 tileNumber = ivec2(gl_NumWorkGroups.xy);
-
-	uint zPlane = itemID.y;
-	uint index  = tileID.y * tileNumber.x + tileID.x;
+	uint index = tileID.y * tileNumber.x + tileID.x;
 
 	// Initialize shared global values for depth and light count
 	if (gl_LocalInvocationIndex == 0) {
-		
+		for (int i = 0; i < 10; i++)
+			visibleLightCount[i] = 0;
+
+		counterCounter = 0;
+
 		viewProjection = ubo.proj * ubo.view;
 		inverseProj = transpose(ubo.proj);
 		inv_projView = inverse(ubo.proj * ubo.view);
-
-		for (int i = 0; i < 10; i++) {
-			visibleLightCount[i] = 0;
-		}
 	}
 
 	int l_index = location.x;
@@ -128,11 +105,8 @@ void main() {
 	barrier();
 
 	// Calculate the frustum coordinates in screen space
-	if (gl_LocalInvocationIndex.x == 0) {
-		// inv_projView = inverse(ubo.proj * ubo.view);
-
-		// uint nearPlane = Z_explicit[zPlane] / max_depth;
-		// uint farPlane  = 1.0f;
+	if (gl_LocalInvocationIndex == 0) {
+		inv_projView = inverse(ubo.proj * ubo.view);
 
 		// vulkan ndc, minDepth = 0.0, maxDepth = 1.0
 		const vec2 ndc_upper_left = vec2(-1.0, -1.0);
@@ -160,14 +134,14 @@ void main() {
 
 
 	    for (int i = 0; i < 4; i++) {
-			frustumPlanes[i][zPlane].xyz = normalize(cross(viewFrustum[i][zPlane] - ubo.pos.xyz, viewFrustum[(i + 1)][zPlane] - ubo.pos.xyz));
-			frustumPlanes[i][zPlane].w   = -dot(frustumPlanes[i][zPlane].xyz, viewFrustum[i][zPlane]);
+			frustumPlanes[i].xyz = normalize(cross(viewFrustum[i] - ubo.pos.xyz, viewFrustum[(i + 1)] - ubo.pos.xyz));
+			frustumPlanes[i].w   = -dot(frustumPlanes[i].xyz, viewFrustum[i]);
 	    }
 
-	    frustumPlanes[4][zPlane].xyz = normalize(cross(viewFrustum[1][zPlane] - viewFrustum[0][zPlane], viewFrustum[3][zPlane] - viewFrustum[0][zPlane]));
-	    frustumPlanes[4][zPlane].w   = -dot(frustumPlanes[4][zPlane].xyz, viewFrustum[0][zPlane]);
-		frustumPlanes[5][zPlane].xyz = normalize(cross(viewFrustum[7][zPlane] - viewFrustum[4][zPlane], viewFrustum[5][zPlane] - viewFrustum[4][zPlane]));
-		frustumPlanes[5][zPlane].w   = -dot(frustumPlanes[5][zPlane].xyz, viewFrustum[4][zPlane]);
+	    frustumPlanes[4].xyz = normalize(cross(viewFrustum[1] - viewFrustum[0], viewFrustum[3]- viewFrustum[0]));
+	    frustumPlanes[4].w   = -dot(frustumPlanes[4].xyz, viewFrustum[0]);
+		frustumPlanes[5].xyz = normalize(cross(viewFrustum[7] - viewFrustum[4], viewFrustum[5]- viewFrustum[4]));
+		frustumPlanes[5].w   = -dot(frustumPlanes[5].xyz, viewFrustum[4]);
 
 	}
 	barrier();
@@ -177,9 +151,9 @@ void main() {
 	uint threadCount = THREAD_COUNT * THREAD_COUNT;
 	uint passCount = (lightCount + threadCount - 1) / threadCount;
 	// uint lightCounter = 0;
-	for (uint i = gl_LocalInvocationIndex.x; i < LIGHT_NUM && visibleLightCount[zPlane] < MAX_CLUSTER_LIGHTS; i += gl_WorkGroupSize.x) {
+	for (uint i = gl_LocalInvocationIndex; i < LIGHT_NUM; i += gl_WorkGroupSize.x) {
 		// Get the lightIndex to test for this thread / pass. If the index is >= light count, then this thread can stop testing lights
-		uint lightIndex = i;// * threadCount + (itemID.y * THREAD_COUNT + itemID.x);
+		uint lightIndex = i;
 
 		vec4 pos = lightBuffer.lights[lightIndex].pos;
 		float radius = lightBuffer.lights[lightIndex].vel.w * 1.5;
@@ -187,7 +161,7 @@ void main() {
 		// We check if the light exists in our frustum
 		bool inFrustum = true;
 		for (uint j = 0; j < 6; j++) {
-			if (dot(pos.xyz, frustumPlanes[j][zPlane].xyz) + frustumPlanes[j][zPlane].w < -radius) {
+			if (dot(pos.xyz, frustumPlanes[j].xyz) + frustumPlanes[j].w < -radius) {
 				inFrustum = false;
 				break;
 			}
@@ -195,157 +169,45 @@ void main() {
 
 		// If greater than zero, then it is a visible light
 		if (inFrustum) {
-			// Add index to the shared array of visible indices
-			uint offset = atomicAdd(visibleLightCount[zPlane], 1);
-			if (visibleLightCount[zPlane] >= ubo.max_lights_per_cluster) {break;}
-			indexLookupBuffer.data[index].indices[offset] = int(lightIndex);
+			// Depth test to find z plane range
+			vec4 viewSpacePos = ubo.proj * ubo.view * vec4(pos.xyz, 1.0);
+			uint startPlane = 0, endPlane = 10;
+
+			for (int j = 0; j < 10; j++) {
+				// sphere depth - plane depth < radius -> within
+				if (viewSpacePos.w - Z_explicit[j + 1] < radius)
+					startPlane = min(startPlane, j);
+
+				// plane depth - sphere depth > radius -> end
+				if (Z_explicit[j] - viewSpacePos.w > radius)
+					endPlane = min(endPlane, j);
+			}
+
+			// uint tableIndex = atomicAdd(counterCounter, 1);
+			// clusterTable.frustums[tableIndex] = vec4(startPlane, endPlane, viewSpacePos.w, 0.0);
+
+			for (uint j = startPlane; j < endPlane; j++) {
+
+				// Add index to the shared array of visible indices
+				uint offset = atomicAdd(visibleLightCount[j], 1);
+				if (visibleLightCount[j] < ubo.max_lights_per_cluster)
+					indexLookupBuffer.data[index + j * tileNumber.x * tileNumber.y].indices[offset] = int(lightIndex);
+			}
+			
 		}
 	}
 
+	memoryBarrier();
 	barrier();
 
 
 	if (gl_LocalInvocationIndex == 0) {
-		if (visibleLightCount[zPlane] < ubo.max_lights_per_cluster) {
-			indexLookupBuffer.data[index].indices[visibleLightCount[zPlane]] = -1;
-		}
+		for (int i = 0; i < 10; i++)
+			if (visibleLightCount[i] < ubo.max_lights_per_cluster) {
+				indexLookupBuffer.data[index + i * tileNumber.x * tileNumber.y].indices[visibleLightCount[i]] = -1;
+			}
 	}
 
 }
 
 
-
-// void main() {
-
-// 	ivec2 location = ivec2(gl_GlobalInvocationID.xy);
-// 	ivec2 itemID = ivec2(gl_LocalInvocationID.xy);
-// 	ivec2 tileID = ivec2(gl_WorkGroupID.xy);
-// 	ivec2 tileNumber = ivec2(gl_NumWorkGroups.xy);
-
-// 	uint zPlane = gl_LocalInvocationIndex.y;
-// 	uint index = tileID.y * tileNumber.x + tileID.x + zPlane * tileNumber.x * tileNumber.y;
-
-// 	// Initialize shared global values for depth and light count
-// 	if (gl_LocalInvocationIndex == 0) {
-// 		// visibleLightCount = 0;
-// 		viewProjection = ubo.proj * ubo.view;
-// 		inverseProj = transpose(ubo.proj);
-// 		inv_projView = inverse(ubo.proj * ubo.view);
-
-// 		for (int i = 0; i < 10; i++)
-// 			visibleLightCount[i] = 0;
-// 	}
-
-// 	int l_index = location.x;
-// 	if (l_index < ubo.number_lights) {
-// 		// Update velocity
-// 		vec4 pos = lightBuffer.lights[l_index].pos;
-// 		vec4 vel = lightBuffer.lights[l_index].vel;
-// 		pos[1] += vel[0]*0.1;
-// 		if (pos[1] >= vel[1])
-// 			pos[1] = vel[2];
-
-// 		lightBuffer.lights[l_index].pos = pos;
-// 	}
-
-// 	barrier();
-
-// 	// Calculate the frustum coordinates in screen space
-	
-// 	if (gl_LocalInvocationIndex.x == 0) {
-		
-// 		uint nearPlane = Z_explicit[zPlane] / max_depth;
-// 		uint farPlane  = 1.0f;
-
-// 		// inv_projView = inverse(ubo.proj * ubo.view);
-
-// 		// vulkan ndc, minDepth = 0.0, maxDepth = 1.0
-// 		const vec2 ndc_upper_left = vec2(-1.0, -1.0);
-// 		const float ndc_near_plane = 0.0;
-// 		const float ndc_far_plane = 1.0;
-		
-
-// 		vec2 tiles_2_pix = 2.0f * vec2(TILE_SIZE, TILE_SIZE) / vec2(ubo.width, ubo.height);
-		
-// 		vec2 screenFrustum[4];
-// 		screenFrustum[0] = ndc_upper_left + tileID * tiles_2_pix;
-// 	    screenFrustum[1] = screenFrustum[0] + vec2(tiles_2_pix.x, 0.0f);
-// 	    screenFrustum[2] = screenFrustum[0] + vec2(tiles_2_pix.x, tiles_2_pix.y);
-// 	    screenFrustum[3] = screenFrustum[0] + vec2(0.0f, tiles_2_pix.x); 
-
-// 	    // Convert to view space
-// 	    vec3 viewFrustum[8];
-// 	    vec4 view;
-// 	    for (int i = 0; i < 4; i++) {
-// 	    	view = inv_projView * vec4(screenFrustum[i], nearPlane, 1.0f);
-// 	    	viewFrustum[i] = view.xyz / view.w;
-// 	    	view = inv_projView * vec4(screenFrustum[i], farPlane, 1.0f);
-// 	    	viewFrustum[i + 4] = view.xyz / view.w;
-// 	    }
-
-
-// 	    for (int i = 0; i < 4; i++) {
-// 			frustumPlanes[i][zPlane].xyz = normalize(cross(viewFrustum[i] - ubo.pos.xyz, viewFrustum[(i + 1)] - ubo.pos.xyz));
-// 			frustumPlanes[i][zPlane].w   = -dot(frustumPlanes[i].xyz, viewFrustum[i]);
-// 	    }
-
-// 	    frustumPlanes[4][zPlane].xyz = normalize(cross(viewFrustum[1][zPlane] - viewFrustum[0][zPlane], viewFrustum[3][zPlane] - viewFrustum[0][zPlane]));
-// 	    frustumPlanes[4][zPlane].w   = -dot(frustumPlanes[4][zPlane].xyz, viewFrustum[0][zPlane]);
-// 		frustumPlanes[5][zPlane].xyz = normalize(cross(viewFrustum[7][zPlane] - viewFrustum[4][zPlane][zPlane], viewFrustum[5][zPlane] - viewFrustum[4][zPlane]));
-// 		frustumPlanes[5][zPlane].w   = -dot(frustumPlanes[5][zPlane].xyz, viewFrustum[4][zPlane]);
-// 	}
-
-// 	barrier();
-
-// 	// Light culling
-// 	uint lightCount = ubo.number_lights;
-// 	uint threadCount = THREAD_COUNT * THREAD_COUNT;
-// 	uint passCount = (lightCount + threadCount - 1) / threadCount;
-// 	float depth, radius;
-// 	for (uint i = gl_LocalInvocationIndex.x; i < LIGHT_NUM && visibleLightCount[zPlane] < MAX_CLUSTER_LIGHTS; i += gl_WorkGroupSize.x) {
-		
-// 		uint lightIndex = i;
-
-
-// 		vec4 pos = lightBuffer.lights[lightIndex].pos;
-// 		float radius = lightBuffer.lights[lightIndex].vel.w * 1.5;
-
-// 		// We check if the light exists in our frustum
-// 		bool inFrustum = true;
-// 		for (uint j = 0; j < 6; j++) {
-// 			if (dot(pos.xyz, frustumPlanes[j][zPlane].xyz) + frustumPlanes[j][zPlane].w < -radius) {
-// 				inFrustum = false;
-// 				break;
-// 			}
-// 		}
-
-// 		// If greater than zero, then it is a visible light
-// 		if (inFrustum) {
-// 			// Add index to the shared array of visible indices
-// 			uint offset = atomicAdd(visibleLightCount[zPlane], 1);
-// 			if (visibleLightCount[zPlane] >= ubo.max_lights_per_cluster) {break;}
-// 			indexLookupBuffer.data[index].indices[offset] = int(lightIndex);
-// 		}
-// 	}
-
-// 	barrier();
-
-// 	if (gl_LocalInvocationIndex.x == 0) {
-
-// 		// uint offset =  (index + gl_LocalInvocationIndex * tileNumber.x * tileNumber.y) * 50;
-// 		// for (uint i = 0; i < min(visibleLightCount, ubo.max_lights_per_cluster) ; i++) {
-// 		// 	uint place = atomicAdd(ZCounters[gl_LocalInvocationIndex], 1);
-// 		// 	if (place >= 50)
-// 		// 		break;
-// 		// 	if (visibleLightZDepth[i] - Z_explicit[gl_LocalInvocationIndex] >= radius)
-// 		// 		continue;
-// 		// 	indexLookupBuffer.data[offset + place] = visibleLightIndices[i];
-// 		// }
-
-// 		if (visibleLightCount[zPlane] < ubo.max_lights_per_cluster) {
-// 			indexLookupBuffer.data[index].indices[visibleLightCount[zPlane]] = -1;
-// 		}
-
-// 	}
-
-// }

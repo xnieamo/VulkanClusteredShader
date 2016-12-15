@@ -39,7 +39,8 @@ layout(std430, binding = 5) buffer ClustersData
 layout(origin_upper_left) in vec4 gl_FragCoord;
 
 int numLights = 200;
-const float Z_explicit[10] = {0.05f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f};
+// const float Z_explicit[10] = {0.05f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f};
+const float Z_explicit[11] = {0.01f, 4.5f, 6.7f, 9.0f, 16.5f, 22.1f, 30.5f, 41.8f, 56.8f, 75.f, 100.f};
 
 #define WIDTH 1200
 #define HEIGHT 1000
@@ -63,7 +64,7 @@ int findZ (float z) {
 
     float minDiff = 1000000.f;
     int minIdx = -1;
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 11; i++) {
     	float tempDiff = z - Z_explicit[i];
     	if (tempDiff < minDiff && tempDiff >= 0.f) {
     		minDiff = tempDiff;
@@ -100,7 +101,7 @@ void main() {
     int Sz = findZ(z_e);
 
     // Find unrolled index
-    int l_idx = Sx + Sy * X;// + Sz * X * Y;
+    int l_idx = Sx + Sy * X + Sz * X * Y;
     // int l_idx2 = Sx + Sy * X + Sz * X * Y;
     // clusterTable.lookupIndices[l_idx][0] = int(Sz);
     // int[] lightIdx = clusterTable.lookupIndices[l_idx];
