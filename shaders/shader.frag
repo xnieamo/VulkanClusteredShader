@@ -32,13 +32,12 @@ layout(std430, binding = 4) buffer LookupIndex
 
 layout(std430, binding = 5) buffer ClustersData
 {
-	// ivec2 lookupIndices[];
-	int lookupIndices[][2];
+	uint lookupIndices[][2];
 } clusterTable;
 
 layout(origin_upper_left) in vec4 gl_FragCoord;
 
-int numLights = 200;
+int numLights = 100;
 // const float Z_explicit[10] = {0.05f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f};
 const float Z_explicit[11] = {0.01f, 4.5f, 6.7f, 9.0f, 16.5f, 22.1f, 30.5f, 41.8f, 56.8f, 75.f, 100.f};
 
@@ -101,24 +100,18 @@ void main() {
     int Sz = findZ(z_e);
 
     // Find unrolled index
-    int l_idx = Sx + Sy * X + Sz * X * Y;
-    // int l_idx2 = Sx + Sy * X + Sz * X * Y;
-    // clusterTable.lookupIndices[l_idx][0] = int(Sz);
-    // int[] lightIdx = clusterTable.lookupIndices[l_idx];
-
-   	// Debug map
-   	// AFDSHFBAISDFHLKSDFHKLSDFHKLSFHKLDFHLKJDS LOOK HERE ALJF:LDSHF:LSDJFL:SDJGL:KDSJG:LSDGJL:KDFJ
-   	// DSFL:SDJFL:SDKFJKDS:FJ :LDSJKFL:JDSLFKJ FLIP BOOL LAK:JFD:LDSKJF:LDSKJF:LDSKFJ:LDSKJF:LDSJF:
+    int l_idx = Sx + Sy * X;// + Sz * X * Y;
+    ivec2 lightIdx = ivec2(clusterTable.lookupIndices[l_idx][0],clusterTable.lookupIndices[l_idx][1]);
 
    	if (false)
    		outColor = vec4(0.f, 0.f, 0.f, 1.f);
    	else 
 	{
 
-		// uint start = lightIdx[0];
-		// uint end =  lightIdx[0] + lightIdx[1];
-		uint start = l_idx * 50;
-		uint end = l_idx * 50 + 50;
+		uint start = lightIdx[0];
+		uint end =  lightIdx[0] + lightIdx[1];
+		// uint start = l_idx * 50;
+		// uint end = l_idx * 50 + 50;
 
 		for (uint i = start; i < end; i++) {
 			int light_index = lookupIndexBuffer.data[i];
@@ -144,24 +137,25 @@ void main() {
 	}
 
 
- //    // Forward 
- //    for (int i = 0; i < numLights; i++) {
+    // // Forward 
+    // for (int i = 0; i < numLights; i++) {
 
- //    	vec4 pos = lights[i].pos;
- //    	vec4 col = lights[i].col;
- //    	vec3 lightDir = pos.xyz - fragPosition;
- //    	float distance = length(lightDir);
- //    	lightDir = lightDir / distance;
+    // 	vec4 pos = lights[i].pos;
+    // 	vec4 col = lights[i].col;
+    // 	vec3 lightDir = pos.xyz - fragPosition;
+    // 	float distance = length(lightDir);
+    // 	lightDir = lightDir / distance;
 
- //    	float attenuation = max(0.001f, pos.w - distance);
+    // 	float attenuation = max(0.001f, pos.w - distance);
 
- //    	float specular = specularLighting(nor, lightDir, viewDir);
- //    	float diffuse  = clamp(dot(nor, lightDir), 0.001, 1.0);
+    // 	float specular = specularLighting(nor, lightDir, viewDir);
+    // 	float diffuse  = clamp(dot(nor, lightDir), 0.001, 1.0);
 
- //    	color += texture(texSampler, fragTexCoord) * attenuation * vec4(normalize(col.rgb), 1.f) * (specular + diffuse); 
- //    }
-	// // Actual output color
- //    outColor = clamp(1.f * color, 0.001, 1.0);
+    // 	color += texture(texSampler, fragTexCoord) * attenuation * vec4(normalize(col.rgb), 1.f) * (specular + diffuse); 
+    // }
+    // outColor = clamp(1.f * color, 0.001, 1.0);
+
+  
 
 	// // Cluster of lights view
 	// uint start = l_idx * 50;

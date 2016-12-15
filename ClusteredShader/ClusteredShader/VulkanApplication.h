@@ -39,7 +39,9 @@
 #define HEIGHT 1000
 #define TILE_SIZE 32
 #define MAX_LIGHTS_PER_CLUSTER 50
-#define CPU_CULL 0
+#define CPU_CULL 1
+#define RADIUS 2.0f
+#define ALT_AABB 1
 
 const std::string MODEL_PATH = "../../res/models/sponza.obj";
 const std::string TEXTURE_PATH = "../../res/textures/kamen.jpg";
@@ -61,12 +63,13 @@ enum ControlState { NONE = 0, ROTATE, TRANSLATE };
 ControlState mouseState = ControlState::NONE;
 
 glm::vec2 screenPos;
-glm::vec3 trans(0.f, 5.f, 0.f);
+glm::vec3 trans(-17.f, 2.5f, 0.f);
 glm::vec2 rotate;
 float scale = 1.f;
 glm::vec3 F, R, U, P;
 
-const float Z_explicit[10] = { 0.05f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f };
+//const float Z_explicit[10] = { 0.05f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f };
+const float Z_explicit[11] = { 0.01f, 4.5f, 6.7f, 9.0f, 16.5f, 22.1f, 30.5f, 41.8f, 56.8f, 75.f, 100.f };
 
 class VulkanApplication {
 public:
@@ -211,33 +214,76 @@ private:
 		return (minVal >= minBound && minVal <= maxBound) || (maxVal >= minBound && maxVal <= maxBound);
 	}
 
+	void getScreenSpaceAABB(glm::vec3 center, float radius, glm::vec3 &boxMin, glm::vec3 &boxMax) {
+		// From: http://gamedev.stackexchange.com/questions/49222/aabb-of-a-spheres-screen-space-projection
+		float d2 = glm::dot(center, center);
+		float a = sqrt(d2 - radius * radius);
+
+
+		glm::vec3 right = (radius / a) * glm::vec3(-center.z, 0.f, center.x);
+		glm::vec3 up = glm::vec3(0.f, radius, 0.f);
+
+		glm::vec4 projectedRight = cubo.proj * glm::vec4(right, 0.f);
+		glm::vec4 projectedUp = cubo.proj * glm::vec4(up, 0.f);
+
+		glm::vec4 projectedCenter = cubo.proj * glm::vec4(center, 1.f);
+
+		glm::vec4 north = projectedCenter + projectedUp;
+		glm::vec4 east = projectedCenter + projectedRight;
+		glm::vec4 south = projectedCenter - projectedUp;
+		glm::vec4 west = projectedCenter - projectedRight;
+
+		north /= north.w;
+		east /= east.w;
+		west /= west.w;
+		south /= south.w;
+
+		boxMin = glm::vec3(min(min(min(east, west), north), south));
+		boxMax = glm::vec3(max(max(max(east, west), north), south));
+
+	}
+
 	void assignLights() {
 		int X = (int)(WIDTH / TILE_SIZE);
 		int Y = (int)(HEIGHT / TILE_SIZE);
 		int Z = 9;
 		clusterIdx.clear();
 		clusterIdx.resize(X+1, std::vector<std::vector<std::vector<int>>>(Y+1, std::vector<std::vector<int>>(Z+1, std::vector<int>())));
-		
-		//std::cout << "All Good so far!" << std::endl;
+
 		int numel = 0;
 		for (int index = 0; index < numLights; index++) {
 			Light l = lights[index];
-			glm::vec4 pos = l.pos;
-			pos[3] = 1.f;
-			float dist = l.vel[3]*2;
+			glm::vec4 light_pos = l.pos;
+			float radius = l.pos.w;
+			light_pos[3] = 1.f;
+			float dist = l.vel[3] * 1.5;
 
 			// Get all the corners of the light's world space AABB
 			std::vector<glm::vec4> aabb = {
-				glm::vec4(pos + glm::vec4(dist, dist, dist, 0.f)),
-				glm::vec4(pos + glm::vec4(dist, dist, -dist, 0.f)),
-				glm::vec4(pos + glm::vec4(dist, -dist, dist, 0.f)),
-				glm::vec4(pos + glm::vec4(dist, -dist, -dist, 0.f)),
-				glm::vec4(pos + glm::vec4(-dist, dist, dist, 0.f)),
-				glm::vec4(pos + glm::vec4(-dist, dist, -dist, 0.f)),
-				glm::vec4(pos + glm::vec4(-dist, -dist, dist, 0.f)),
-				glm::vec4(pos + glm::vec4(-dist, -dist, -dist, 0.f))
+				glm::vec4(light_pos + glm::vec4(dist, dist, dist, 0.f)),
+				glm::vec4(light_pos + glm::vec4(dist, dist, -dist, 0.f)),
+				glm::vec4(light_pos + glm::vec4(dist, -dist, dist, 0.f)),
+				glm::vec4(light_pos + glm::vec4(dist, -dist, -dist, 0.f)),
+				glm::vec4(light_pos + glm::vec4(-dist, dist, dist, 0.f)),
+				glm::vec4(light_pos + glm::vec4(-dist, dist, -dist, 0.f)),
+				glm::vec4(light_pos + glm::vec4(-dist, -dist, dist, 0.f)),
+				glm::vec4(light_pos + glm::vec4(-dist, -dist, -dist, 0.f))
 			};
 
+#if ALT_AABB == 1
+			glm::vec3 bbMin, bbMax;
+			glm::vec4 viewCenter = cubo.view * light_pos;
+			getScreenSpaceAABB(viewCenter, radius * 2, bbMin, bbMax);
+			glm::vec4 proj_pos = cubo.proj * cubo.view * light_pos;
+			proj_pos /= proj_pos.w;
+
+			int minX = glm::clamp(int(glm::round((bbMin.x + 1) / 2.f * WIDTH)) / TILE_SIZE, -1, X + 1);
+			int minY = glm::clamp(int(glm::round((1 - bbMax.y) / 2.f * HEIGHT)) / TILE_SIZE, -1, Y + 1);
+			int maxX = glm::clamp(int(glm::round((bbMax.x + 1) / 2.f * WIDTH)) / TILE_SIZE, -1, X + 1);
+			int maxY = glm::clamp(int(glm::round((1 - bbMin.y) / 2.f * HEIGHT)) / TILE_SIZE, -1, Y + 1);
+			glm::ivec3 min_screen(minX, minY, 0), max_screen(maxX, maxY, 0);
+
+#else
 			// Loop over each corner to find the min/max screen space values for
 			// X and Y. Also find min/max for Z in view space
 			glm::ivec3 min_screen(INT_MAX), max_screen(INT_MIN);
@@ -264,6 +310,7 @@ private:
 				if (Sz < min_screen[2]) { min_screen[2] = Sz; }
 				if (Sz > max_screen[2]) { max_screen[2] = Sz; }
 			}
+#endif
 
 			// Clamp final min/max values if part of or the entire AABB
 			// intersects with the clusters
@@ -282,15 +329,12 @@ private:
 				max_screen[2] = glm::clamp(max_screen[2], 0, Z);
 			}
 
-			//std::cout << "Min: " << min_screen[0] << " " << min_screen[1] << " " << min_screen[2] << std::endl;
-			//std::cout << "Max: " << max_screen[0] << " " << max_screen[1] << " " << max_screen[2] << std::endl;
 
 			// Loop over indices and add light to buffer
 			if (inBound(min_screen[0], max_screen[0], 0, X) && inBound(min_screen[1], max_screen[1], 0, Y)) {
 				for (int i = min_screen[0]; i <= max_screen[0]; i++) {
 					for (int j = min_screen[1]; j <= max_screen[1]; j++) {
 						for (int k = min_screen[2]; k <= max_screen[2]; k++) {
-						//int k = 0;
 							if (i >= 0 && j >= 0 && k >= 0) {
 								numel++;
 								if (clusterIdx[i][j][k].size() < MAX_LIGHTS_PER_CLUSTER)
@@ -301,20 +345,6 @@ private:
 				}
 			}
 
-			//// Dummy test, fill all lights into z=0 buffer
-			//for (int i = 0; i <= X; i++) {
-			//	for (int j = 0; j <= Y; j++) {
-			//		//for (int k = minz; k <= maxz; k++) {
-			//		int k = 0;
-			//		if (i >= 0 && j >= 0 && k >= 0) {
-			//			numel++;
-			//			if (clusterIdx[i][j][k].size() < MAX_LIGHTS_PER_CLUSTER)
-			//				clusterIdx[i][j][k].push_back(index);
-			//		}
-			//		//}
-			//	}
-			//}
-			
 		}
 
 
@@ -363,24 +393,10 @@ private:
 
 	}
 
-	void updateClusterDataBuffer() {
-		std::vector<std::vector<int>> clusterData;
-		clusterData.resize(numberOfClusters, std::vector<int>(2, 0));
-
-		VkDeviceSize bufferSize = numberOfClusters * 2 * sizeof(int);
-
-		void* data;
-		vkMapMemory(device, clusterDataStagingBufferMemory, 0, bufferSize, 0, &data);
-		memcpy(data, clusterData.data(), (size_t)bufferSize);
-		vkUnmapMemory(device, clusterDataStagingBufferMemory);
-
-		copyBuffer(clusterDataStagingBuffer, clusterDataBuffer, bufferSize);
-	}
-
 	void createClusterIndexStorageBuffers() {
 		int X = (int)(WIDTH / TILE_SIZE) + 1;
 		int Y = (int)(HEIGHT / TILE_SIZE) + 1;
-		int Z = 10;
+		int Z = 11;
 		numberOfClusters = X * Y * Z;
 		clusterIndexSize = numberOfClusters * MAX_LIGHTS_PER_CLUSTER;
 
@@ -440,11 +456,10 @@ private:
 			col.b = u01(rng);
 			col.a = 1.f;
 
-			float radius = 5.f;
-			float dist = glm::sqrt(radius * radius / 3.f);
-			lights[i].pos = glm::vec4(pos, radius);
+			//float dist = glm::sqrt(RADIUS * RADIUS / 3.f);
+			lights[i].pos = glm::vec4(pos, RADIUS);
 			lights[i].col = col;
-			lights[i].vel = { 0.05f, 20.f, 0.0f, dist };
+			lights[i].vel = { 0.05f, 20.f, 0.0f, RADIUS };
 		}
 
 		VkDeviceSize bufferSize = lights.size() * sizeof(Light);
@@ -488,7 +503,7 @@ private:
 		offsetBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 		offsetBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-		std::array<VkDescriptorSetLayoutBinding, 4> bindings = { storageBufferABinding, computeUniformBinding, lookupBinding, offsetBinding };// , lookupBinding, offsetBinding};
+		std::array<VkDescriptorSetLayoutBinding, 4> bindings = { storageBufferABinding, computeUniformBinding, lookupBinding, offsetBinding };
 		VkDescriptorSetLayoutCreateInfo layoutInfo = {};
 		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 		layoutInfo.bindingCount = bindings.size();
@@ -672,8 +687,6 @@ private:
 		vkCmdBindPipeline(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipeline);
 		vkCmdBindDescriptorSets(lightCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, lightPipelineLayout, 0, 1, &lightDescriptorSet, 0, 0);
 		vkCmdDispatch(lightCommandBuffer, (WIDTH + TILE_SIZE - 1) / TILE_SIZE, (WIDTH + TILE_SIZE - 1) / TILE_SIZE, 1);
-
-		//vkCmdDispatch(lightCommandBuffer, 1, 1, 1);
 
 		for (int i = 0; i < 2; i++) {
 			barriers[i].srcAccessMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;

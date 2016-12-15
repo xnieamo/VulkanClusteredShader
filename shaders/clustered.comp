@@ -43,28 +43,19 @@ layout(std430, binding = 2) buffer IndexLookup
 	lightIndexArray data[];
 } indexLookupBuffer;
 
-layout(std430, binding = 3) buffer ClustersData
-{
-	vec4 frustums[];
-} clusterTable;
-
 
 // Shared values between all the threads in the group
 shared uint visibleLightCount[10];
-vec4 frustumPlanes[6];
-shared uint counterCounter;
-
+shared vec4 frustumPlanes[4];
 shared mat4 inv_projView;
-
-#define LIGHT_NUM 200
-
 
 // const float Z_explicit[10] = {0.00f, 0.23f, 0.52f, 1.2f, 2.7f, 6.0f, 14.f, 31.f, 71.f, 161.f};
 const float Z_explicit[11] = {0.01f, 4.5f, 6.7f, 9.0f, 16.5f, 22.1f, 30.5f, 41.8f, 56.8f, 75.f, 100.f};
 const float max_depth = 100.f;
 
+#define LIGHT_NUM 100
 #define TILE_SIZE 32
-#define THREAD_COUNT 4
+#define THREAD_COUNT 16
 layout(local_size_x = THREAD_COUNT, local_size_y = 1) in;
 void main() {
 
@@ -77,8 +68,6 @@ void main() {
 	if (gl_LocalInvocationIndex == 0) {
 		for (int i = 0; i < 10; i++)
 			visibleLightCount[i] = 0;
-
-		counterCounter = 0;
 		inv_projView = inverse(ubo.proj * ubo.view);
 	}
 
@@ -95,7 +84,7 @@ void main() {
 
 	barrier();
 
-	// Calculate the frustum coordinates in screen space
+	// Create the frustum
 	if (gl_LocalInvocationIndex == 0) {
 
 		vec2 tiles_2_pix = 2.0f * vec2(TILE_SIZE, TILE_SIZE) / vec2(ubo.width, ubo.height);
@@ -121,64 +110,54 @@ void main() {
 			frustumPlanes[i].xyz = normalize(cross(viewFrustum[i] - ubo.pos.xyz, viewFrustum[(i + 1)] - ubo.pos.xyz));
 			frustumPlanes[i].w   = -dot(frustumPlanes[i].xyz, viewFrustum[i]);
 	    }
-
-	    frustumPlanes[4].xyz = normalize(cross(viewFrustum[1] - viewFrustum[0], viewFrustum[3]- viewFrustum[0]));
-	    frustumPlanes[4].w   = -dot(frustumPlanes[4].xyz, viewFrustum[0]);
-		frustumPlanes[5].xyz = normalize(cross(viewFrustum[7] - viewFrustum[4], viewFrustum[5]- viewFrustum[4]));
-		frustumPlanes[5].w   = -dot(frustumPlanes[5].xyz, viewFrustum[4]);
-
 	}
 	barrier();
 
+	// Compute light culling
+	uint passCount = (LIGHT_NUM + THREAD_COUNT - 1) / THREAD_COUNT;
+	for (uint i = 0; i < passCount; i++) {
+		uint lightIndex = i * THREAD_COUNT + itemID.x;
+		if (lightIndex > LIGHT_NUM) {
+			break;
+		}
 
-	for (uint lightIndex = gl_LocalInvocationIndex; lightIndex < ubo.number_lights; lightIndex += gl_WorkGroupSize.x) {
-		// Get the lightIndex to test for this thread / pass. If the index is >= light count, then this thread can stop testing lights
+		vec4 pos     = lightBuffer.lights[lightIndex].pos;
+		float radius = lightBuffer.lights[lightIndex].pos.w;
 
-		vec4 pos = lightBuffer.lights[lightIndex].pos;
-		float radius = lightBuffer.lights[lightIndex].vel.w * 1.5;
-
-		// We check if the light exists in our frustum
 		bool inFrustum = true;
-		for (uint j = 0; j < 6; j++) {
+		for (uint j = 0; j < 4; j++) {
 			if (dot(pos.xyz, frustumPlanes[j].xyz) + frustumPlanes[j].w < -radius) {
 				inFrustum = false;
 				break;
 			}
 		}
 
-		// If greater than zero, then it is a visible light
 		if (inFrustum) {
 			// Depth test to find z plane range
 			vec4 viewSpacePos = ubo.proj * ubo.view * vec4(pos.xyz, 1.0);
 			vec4 viewSpaceRay = ubo.proj * ubo.view * vec4(normalize(pos.xyz - ubo.pos.xyz), 0.0);
-			float rayLength = length(viewSpaceRay.xyz);
+			radius = radius * length(viewSpaceRay.xyz);
+			
 			uint startPlane = 0, endPlane = 10;
-
 			for (int j = 0; j < 10; j++) {
-				// sphere depth - plane depth < radius -> within
-				if (viewSpacePos.w - Z_explicit[j + 1] < radius * rayLength)
+				// sphere depth - plane depth < radius -> start
+				if (viewSpacePos.z - Z_explicit[j + 1] < radius)
 					startPlane = min(startPlane, j);
 
 				// plane depth - sphere depth > radius -> end
-				if (Z_explicit[j] - viewSpacePos.w > radius * rayLength)
+				if (Z_explicit[j] - viewSpacePos.z > radius)
 					endPlane = min(endPlane, j);
 			}
 
-			// uint tableIndex = atomicAdd(counterCounter, 1);
-			// clusterTable.frustums[tableIndex] = vec4(startPlane, endPlane, viewSpacePos.w, 0.0);
-
+			// Add index to appropriate clusters
 			for (uint j = startPlane; j < endPlane; j++) {
-
-				// Add index to the shared array of visible indices
 				uint offset = atomicAdd(visibleLightCount[j], 1);
 				if (visibleLightCount[j] < ubo.max_lights_per_cluster)
 					indexLookupBuffer.data[index + j * tileNumber.x * tileNumber.y].indices[offset] = int(lightIndex);
 			}
-			
 		}
 	}
 
-	memoryBarrier();
 	barrier();
 
 	if (gl_LocalInvocationIndex == 0) {
