@@ -54,8 +54,6 @@ shared uint visibleLightCount[10];
 vec4 frustumPlanes[6];
 shared uint counterCounter;
 
-shared mat4 viewProjection;
-shared mat4 inverseProj;
 shared mat4 inv_projView;
 
 #define LIGHT_NUM 200
@@ -66,13 +64,10 @@ const float Z_explicit[11] = {0.01f, 4.5f, 6.7f, 9.0f, 16.5f, 22.1f, 30.5f, 41.8
 const float max_depth = 100.f;
 
 #define TILE_SIZE 32
-#define THREAD_COUNT 8
+#define THREAD_COUNT 4
 layout(local_size_x = THREAD_COUNT, local_size_y = 1) in;
 void main() {
 
-
-
-	ivec2 location = ivec2(gl_GlobalInvocationID.xy);
 	ivec2 itemID = ivec2(gl_LocalInvocationID.xy);
 	ivec2 tileID = ivec2(gl_WorkGroupID.xy);
 	ivec2 tileNumber = ivec2(gl_NumWorkGroups.xy);
@@ -84,40 +79,29 @@ void main() {
 			visibleLightCount[i] = 0;
 
 		counterCounter = 0;
-
-		viewProjection = ubo.proj * ubo.view;
-		inverseProj = transpose(ubo.proj);
 		inv_projView = inverse(ubo.proj * ubo.view);
 	}
 
-	int l_index = location.x;
-	if (l_index < ubo.number_lights) {
+	if (gl_GlobalInvocationID.x < ubo.number_lights) {
 		// Update velocity
-		vec4 pos = lightBuffer.lights[l_index].pos;
-		vec4 vel = lightBuffer.lights[l_index].vel;
+		vec4 pos = lightBuffer.lights[gl_GlobalInvocationID.x].pos;
+		vec4 vel = lightBuffer.lights[gl_GlobalInvocationID.x].vel;
 		pos[1] += vel[0]*0.1;
 		if (pos[1] >= vel[1])
 			pos[1] = vel[2];
 
-		lightBuffer.lights[l_index].pos = pos;
+		lightBuffer.lights[gl_GlobalInvocationID.x].pos = pos;
 	}
 
 	barrier();
 
 	// Calculate the frustum coordinates in screen space
 	if (gl_LocalInvocationIndex == 0) {
-		inv_projView = inverse(ubo.proj * ubo.view);
-
-		// vulkan ndc, minDepth = 0.0, maxDepth = 1.0
-		const vec2 ndc_upper_left = vec2(-1.0, -1.0);
-		const float ndc_near_plane = 0.0;
-		const float ndc_far_plane = 1.0;
-		
 
 		vec2 tiles_2_pix = 2.0f * vec2(TILE_SIZE, TILE_SIZE) / vec2(ubo.width, ubo.height);
 		
 		vec2 screenFrustum[4];
-		screenFrustum[0] = ndc_upper_left + tileID * tiles_2_pix;
+		screenFrustum[0] = vec2(-1.0, -1.0) + tileID * tiles_2_pix;
 	    screenFrustum[1] = screenFrustum[0] + vec2(tiles_2_pix.x, 0.0f);
 	    screenFrustum[2] = screenFrustum[0] + vec2(tiles_2_pix.x, tiles_2_pix.y);
 	    screenFrustum[3] = screenFrustum[0] + vec2(0.0f, tiles_2_pix.x); 
@@ -147,13 +131,8 @@ void main() {
 	barrier();
 
 
-	uint lightCount = ubo.number_lights;
-	uint threadCount = THREAD_COUNT * THREAD_COUNT;
-	uint passCount = (lightCount + threadCount - 1) / threadCount;
-	// uint lightCounter = 0;
-	for (uint i = gl_LocalInvocationIndex; i < LIGHT_NUM; i += gl_WorkGroupSize.x) {
+	for (uint lightIndex = gl_LocalInvocationIndex; lightIndex < ubo.number_lights; lightIndex += gl_WorkGroupSize.x) {
 		// Get the lightIndex to test for this thread / pass. If the index is >= light count, then this thread can stop testing lights
-		uint lightIndex = i;
 
 		vec4 pos = lightBuffer.lights[lightIndex].pos;
 		float radius = lightBuffer.lights[lightIndex].vel.w * 1.5;
@@ -171,15 +150,17 @@ void main() {
 		if (inFrustum) {
 			// Depth test to find z plane range
 			vec4 viewSpacePos = ubo.proj * ubo.view * vec4(pos.xyz, 1.0);
+			vec4 viewSpaceRay = ubo.proj * ubo.view * vec4(normalize(pos.xyz - ubo.pos.xyz), 0.0);
+			float rayLength = length(viewSpaceRay.xyz);
 			uint startPlane = 0, endPlane = 10;
 
 			for (int j = 0; j < 10; j++) {
 				// sphere depth - plane depth < radius -> within
-				if (viewSpacePos.w - Z_explicit[j + 1] < radius)
+				if (viewSpacePos.w - Z_explicit[j + 1] < radius * rayLength)
 					startPlane = min(startPlane, j);
 
 				// plane depth - sphere depth > radius -> end
-				if (Z_explicit[j] - viewSpacePos.w > radius)
+				if (Z_explicit[j] - viewSpacePos.w > radius * rayLength)
 					endPlane = min(endPlane, j);
 			}
 
@@ -199,7 +180,6 @@ void main() {
 
 	memoryBarrier();
 	barrier();
-
 
 	if (gl_LocalInvocationIndex == 0) {
 		for (int i = 0; i < 10; i++)
